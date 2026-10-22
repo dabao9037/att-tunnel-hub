@@ -293,6 +293,66 @@ def status_json():
         'forwarders': out,
     }
 
+# ---------------------------------------------------------------- 落地节点汇总
+def collect_nodes(timeout=40.0):
+    """并发向所有在线转发机拉它们 att-tunnel 面板的 /api/status，汇总落地节点。
+
+    先把所有请求一起投进总线，再统一等：多台转发机是并行的，
+    用绝对截止时间而不是每台各等 timeout，否则 N 台最坏要等 N*timeout。
+    """
+    jobs = []
+    metas = []
+    for name, rec in sorted(fwd_all().items()):
+        meta = {'name': name, 'ip': rec.get('ip', ''), 'note': rec.get('note', ''),
+                'online': fwd_online(rec), 'count': 0, 'error': ''}
+        if not meta['online']:
+            meta['error'] = '转发机不在线'
+        elif not (rec.get('agent') or {}).get('web'):
+            meta['error'] = '转发机面板未就绪'
+        else:
+            jobs.append((meta, bus.submit(name, {'method': 'GET', 'path': '/api/status',
+                                                 'body': '', 'ctype': ''})))
+        metas.append(meta)
+
+    nodes = []
+    end = time.monotonic() + timeout
+    for meta, job in jobs:
+        left = max(1.0, end - time.monotonic())
+        resp = bus.wait(job, left)
+        if resp is None:
+            meta['error'] = '没有在超时前应答'
+            continue
+        if (resp.get('status') or 0) != 200:
+            meta['error'] = '转发机面板返回 HTTP %s' % resp.get('status')
+            continue
+        try:
+            d = json.loads(resp.get('body') or '{}')
+        except ValueError:
+            meta['error'] = '转发机面板返回的不是 JSON'
+            continue
+        if d.get('error'):
+            meta['error'] = str(d['error'])[:200]
+        for n in d.get('nodes') or []:
+            nodes.append({
+                'fwd': meta['name'],
+                'fwd_ip': meta['ip'],
+                'name': n.get('name', ''),
+                'port': n.get('port', ''),
+                'sni': n.get('sni', ''),
+                'exit': n.get('exit', ''),
+                'online': bool(n.get('online')),
+                'ip': n.get('ip', ''),
+                'up': n.get('up') or 0,
+                'down': n.get('down') or 0,
+                'total': n.get('total') or 0,
+                'rate_up': n.get('rate_up') or 0,
+                'rate_down': n.get('rate_down') or 0,
+                'probe_err': n.get('probe_err', ''),
+            })
+            meta['count'] += 1
+    return {'now': now(), 'nodes': nodes, 'forwarders': metas}
+
+
 # ---------------------------------------------------------------- 一键代码
 def agent_cmd(rec):
     """转发机（机器2/3）跟的一键代码。
@@ -372,6 +432,7 @@ dialog::backdrop{background:#0008}.dh{padding:16px 20px;border-bottom:1px solid 
 <header class="card"><div><h1>🛰️ att-tunnel-hub <span class="mut" style="font-size:13px;font-weight:400">v{V}</span></h1>
 <div class="hinfo mut" id="hinfo">加载中…</div></div>
 <div class="acts"><button class="btn p" id="bAdd" type="button">＋ 添加转发机</button>
+<a class="btn" href="{P}/nodes">🌐 落地节点汇总</a>
 <button class="btn" id="bRef" type="button">刷新</button>
 <form method="post" action="{P}/logout" style="margin:0"><input type="hidden" name="csrf" value="{C}"><button class="btn" type="submit">退出</button></form></div></header>
 <div class="card alert" id="err" role="alert"></div>
@@ -493,6 +554,110 @@ $("#fEdit").onsubmit=async e=>{e.preventDefault();const b=$("#eOk");b.disabled=t
       ip:$("#eIp").value.trim(),note:$("#eNote").value.trim()});
     $("#dEdit").close();toast(j.renamed?"已保存（已改名，无需重装）":"已保存","ok");load();}
   catch(err){toast(err.message,"bad");}finally{b.disabled=false;}};
+</script>
+'''
+
+PAGE_NODES = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>落地节点 · att-tunnel-hub</title><style>{CSS}
+.wrap{max-width:1180px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 20px;margin-bottom:16px}
+header h1{font-size:19px;margin:0}.hinfo{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.on{color:var(--ok);background:var(--okb)}.pill.off{color:var(--bad);background:var(--badb)}.pill.w{color:var(--warn);background:var(--warnb)}
+.sum{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.sum .card{padding:14px 16px}.sum b{display:block;font-size:24px;font-weight:700;margin-top:2px}
+.alert{padding:12px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);display:none;white-space:pre-wrap}
+.warnbox{padding:12px 16px;margin-bottom:16px;border-color:var(--warn);color:var(--warn);background:var(--warnb);display:none;white-space:pre-wrap;font-size:13px}
+.tblwrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--bg)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.fwdcell{font-weight:600}
+.sec{display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px}.sec h3{margin:0;font-size:16px}
+.empty{padding:30px;text-align:center}
+#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9;max-width:min(380px,90vw)}
+.toast{padding:10px 14px;border-radius:12px;color:#fff;background:#0f172a;box-shadow:var(--sh);font-size:14px}
+.toast.ok{background:#15803d}.toast.bad{background:#b91c1c}
+@media(max-width:760px){.sum{grid-template-columns:repeat(2,1fr)}.wrap{padding:10px}header{padding:14px}}
+</style></head><body><div class="wrap">
+<header class="card"><div><h1>🌐 落地节点汇总 <span class="mut" style="font-size:13px;font-weight:400">v{V}</span></h1>
+<div class="hinfo mut" id="hinfo">加载中…</div></div>
+<div class="acts"><a class="btn" href="{P}/">← 转发机</a>
+<button class="btn" id="bRef" type="button">刷新</button>
+<form method="post" action="{P}/logout" style="margin:0"><input type="hidden" name="csrf" value="{C}"><button class="btn" type="submit">退出</button></form></div></header>
+<div class="card alert" id="err" role="alert"></div>
+<div class="card warnbox" id="warn"></div>
+<div class="sum" id="sum"></div>
+<div class="sec"><h3>所有落地节点</h3><span class="mut" style="font-size:13px" id="meta" aria-live="polite"></span></div>
+<div class="card tblwrap" id="tbl"></div></div>
+<div id="toasts" aria-live="polite"></div>
+'''
+PAGE_NODES += '''
+<script>
+const P="{P}", C="{C}";
+const $=s=>document.querySelector(s);
+function toast(m,k){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
+  $("#toasts").appendChild(d);setTimeout(()=>d.remove(),4200);}
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function fb(n){n=+n||0;const u=["B","KB","MB","GB","TB","PB"];let i=0;
+  while(n>=1024&&i<5){n/=1024;i++}return(i?n.toFixed(n<10?2:n<100?1:0):n)+" "+u[i];}
+function row(n){
+  const cls=n.online?"on":"off", txt=n.online?"在线":"离线";
+  const ip=n.ip?esc(n.ip):'<span class="mut">—</span>';
+  const tip=n.probe_err?' title="'+esc(n.probe_err)+'"':'';
+  return '<tr><td class="fwdcell">'+esc(n.fwd)+'<div class="mut mono" style="font-weight:400">'+esc(n.fwd_ip)+'</div></td>'
+    +'<td>'+esc(n.name)+'</td>'
+    +'<td><span class="pill '+cls+'"'+tip+'>'+txt+'</span></td>'
+    +'<td class="mono">'+ip+'</td>'
+    +'<td class="num">'+esc(n.port)+'</td>'
+    +'<td class="mono">'+esc(n.sni||"—")+'</td>'
+    +'<td class="num">'+fb(n.total)+'</td>'
+    +'<td class="num mut">↑'+fb(n.rate_up)+'/s ↓'+fb(n.rate_down)+'/s</td>'
+    +'<td><a class="btn s" href="'+P+'/f/'+encodeURIComponent(n.fwd)+'/">管理</a></td></tr>';
+}
+async function load(){
+  $("#meta").textContent="正在向各转发机取数…";
+  try{
+    const r=await fetch(P+"/api/nodes",{headers:{"Accept":"application/json"}});
+    if(r.status===401){location.href=P+"/";return;}
+    const d=await r.json();
+    const ns=d.nodes||[], fs=d.forwarders||[];
+    const on=ns.filter(n=>n.online).length;
+    const total=ns.reduce((s,n)=>s+(+n.total||0),0);
+    $("#sum").innerHTML=
+      '<div class="card"><span class="mut">转发机</span><b>'+fs.length+'</b></div>'
+     +'<div class="card"><span class="mut">落地节点</span><b>'+ns.length+'</b></div>'
+     +'<div class="card"><span class="mut">节点在线</span><b>'+on+'</b></div>'
+     +'<div class="card"><span class="mut">累计流量</span><b>'+fb(total)+'</b></div>';
+    const okf=fs.filter(f=>!f.error);
+    $("#hinfo").innerHTML='<span>已取到 '+okf.length+'/'+fs.length+' 台转发机的节点</span>';
+    const bad=fs.filter(f=>f.error);
+    if(bad.length){
+      $("#warn").textContent="这几台转发机的节点没取到：\\n"
+        +bad.map(f=>"  • "+f.name+"（"+f.ip+"）："+f.error).join("\\n");
+      $("#warn").style.display="block";
+    }else{$("#warn").style.display="none";}
+    ns.sort((a,b)=>a.fwd===b.fwd?a.name.localeCompare(b.name):a.fwd.localeCompare(b.fwd));
+    $("#tbl").innerHTML=ns.length
+      ?'<table><thead><tr><th>转发机</th><th>节点</th><th>状态</th><th>出口 IP</th>'
+        +'<th>入口端口</th><th>伪装域名</th><th>累计流量</th><th>当前速率</th><th></th></tr></thead>'
+        +'<tbody>'+ns.map(row).join("")+'</tbody></table>'
+      :'<div class="empty mut">还没有落地节点。进某台转发机的「管理落地机」添加节点。</div>';
+    $("#meta").textContent="更新于 "+new Date().toLocaleTimeString();
+    $("#err").style.display="none";
+  }catch(e){
+    $("#err").textContent="读取失败："+e.message;$("#err").style.display="block";
+    $("#meta").textContent="";
+  }
+}
+$("#bRef").onclick=()=>load();
+load();setInterval(load,30000);
 </script>
 '''
 
@@ -686,6 +851,16 @@ class H(http.server.BaseHTTPRequestHandler):
             if not s:
                 return self.jsend(401, {'error': 'unauthorized'})
             return self.jsend(200, status_json())
+        if r == '/nodes':
+            if not s:
+                return self.login_page(200)
+            page = (PAGE_NODES.replace('{CSS}', CSS).replace('{P}', PREFIX)
+                    .replace('{C}', s['csrf']).replace('{V}', VERSION))
+            return self.send(200, page)
+        if r == '/api/nodes':
+            if not s:
+                return self.jsend(401, {'error': 'unauthorized'})
+            return self.jsend(200, collect_nodes())
         if r.startswith('/f/'):
             if not s:
                 return self.redirect(PREFIX + '/')
