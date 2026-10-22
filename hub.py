@@ -267,11 +267,15 @@ def status_json():
 
 # ---------------------------------------------------------------- 一键代码
 def agent_cmd(rec):
-    """转发机（机器2/3）跟的一键代码：装 att-tunnel A 端 + agent。"""
+    """转发机（机器2/3）跟的一键代码。
+
+    形式与 duola 项目的添加服务器命令一致：下载脚本 + -a 地址 -s 密钥，
+    执行时不问任何问题（伪装域名由脚本自己定，不可用时自动换）。
+    """
     url = RAW_URL or 'https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh'
     hub = HUB_URL or '(面板外网地址未配置)'
-    return ('bash <(curl -fsSL %s) --forwarder %s %s'
-            % (url, hub, rec['token']))
+    return ('curl -L %s -o ./install.sh && chmod +x ./install.sh && '
+            './install.sh -a %s -s %s' % (url, hub, rec['token']))
 
 
 def status_line(rec):
@@ -358,7 +362,7 @@ PAGE_MAIN += '''
 <button class="btn p" id="aOk" type="submit">生成一键代码</button></div></form></dialog>
 
 <dialog id="dCmd" aria-labelledby="dCmdH"><div class="dh" id="dCmdH">一键安装代码</div><div class="db">
-<p class="mut" style="font-size:13px">在这台转发机上用 root 跑下面这条命令。它会装好 att-tunnel 入口端和上报 agent，装完这里会变成「在线」。<br>代码里带着该机的专属 token，请当密码保管。</p>
+<p class="mut" style="font-size:13px">在这台转发机上用 root 跑下面这条命令，全程不会问任何问题。它会装好 att-tunnel 入口端和上报 agent，装完这里会变成「在线」。<br>代码里带着该机的专属密钥，请当密码保管。</p>
 <div class="copy"><code class="mono" id="cmdText"></code><button class="btn s" type="button" id="cmdCopy">复制</button></div>
 </div><div class="df"><button class="btn p" type="button" id="cmdClose">知道了</button></div></dialog>
 

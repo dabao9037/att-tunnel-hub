@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # att-tunnel-hub 一键安装脚本
 #
-#   机器1 面板机：  bash <(curl -fsSL <RAW>) --panel
-#   机器2/3 转发机：bash <(curl -fsSL <RAW>) --forwarder <面板地址> <token>
-#                   （这条命令由面板里「添加转发机」自动生成，不用手敲）
+#   机器1 面板机：  ./install.sh --panel
+#   机器2/3 转发机：./install.sh -a <面板地址> -s <密钥>
+#                   （这条命令由面板里「添加转发机」自动生成，复制粘贴即可，全程零交互）
 #   落地机：        由转发机面板里「添加落地机」生成命令，走 att-tunnel 原生流程
 #
 # 架构：面板机不过流量；转发机 = att-tunnel A 端 + agent（主动回连面板）；
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.0.1"
+VERSION="1.1.0"
 # att-tunnel 网页面板（--web）在 v2.2.0 才有，目前还在 PR #2 分支上，main 仍是 v2.0.0。
 # 先固定到 v2.2.0 的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/1527494437763cb4e3d4e9360657cf9994a6596d/install.sh}"
 HUB_RAW_URL="${HUB_RAW_URL:-https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh}"
+# 转发机装 att-tunnel 入口端时用的 REALITY 伪装域名。取 att-tunnel 预置列表第一个；
+# 万一它不支持 TLS 1.3，att-tunnel 自己会换成预置列表里可用的那个，不会回头问人。
+# 需要指定时加 -d <域名>。
+DEFAULT_SNI="${ATT_HUB_SNI:-www.atlasobscura.com}"
 
 HUB_DIR=/usr/local/lib/att-hub
 HUB_ETC=/etc/att-hub
@@ -133,7 +137,10 @@ EOF
 
   write_panel_unit
   systemctl daemon-reload
-  systemctl enable --now att-hub >/dev/null 2>&1 || systemctl restart att-hub
+  systemctl enable att-hub >/dev/null 2>&1 || true
+  # 必须 restart：服务已在跑时 enable --now 会直接成功，|| restart 永远不触发，
+  # 结果新代码落了盘但还是老进程在对外服务（升级看不到新功能）。
+  systemctl restart att-hub
   sleep 1
   systemctl is-active --quiet att-hub || { journalctl -u att-hub -n 20 --no-pager; die "面板启动失败"; }
 
@@ -205,10 +212,10 @@ open_fw(){
 
 # ---------------------------------------------------------------- 转发机（机器2/3）
 install_forwarder(){
-  local hub="${1:-}" token="${2:-}"
+  local hub="${1:-}" token="${2:-}" sni="${3:-}"
   need_root
   [ -n "$hub" ] && [ -n "$token" ] \
-    || die "用法：--forwarder <面板地址> <token>（请从面板「添加转发机」复制整条命令）"
+    || die "用法：./install.sh -a <面板地址> -s <密钥>（请从面板「添加转发机」复制整条命令）"
   case "$hub" in
     http://*|https://*) ;;
     *) die "面板地址要带 http:// 或 https://" ;;
@@ -232,7 +239,11 @@ install_forwarder(){
 落地机不需要跑这条命令，它由对应转发机的面板里「添加节点」生成的命令安装。"
   else
     info "本机还没有 att-tunnel，先装入口端（A 端）"
-    ATT_RAW_URL="$ATT_REPO_RAW" bash "$att" --server-a || { rm -f "$att"; die "att-tunnel A 端安装失败"; }
+    # 全程零交互：ATT_SNI 必须有值，否则 deploy_a 会弹出伪装域名选单让人选
+    # （ATT_NONINTERACTIVE 管不到那一处）。给定值后 att-tunnel 会先实测它，
+    # 不支持 TLS 1.3 就自动改用它自己的预置列表逐个试，仍然不用人管。
+    ATT_RAW_URL="$ATT_REPO_RAW" ATT_NONINTERACTIVE=1 ATT_SNI="${sni:-$DEFAULT_SNI}" \
+      bash "$att" --server-a || { rm -f "$att"; die "att-tunnel A 端安装失败"; }
   fi
 
   # 2. 开 att-tunnel 自带面板（转发机加/删落地机的页面就是它）
@@ -267,7 +278,8 @@ EOF
 
   write_agent_unit
   systemctl daemon-reload
-  systemctl enable --now att-hub-agent >/dev/null 2>&1 || systemctl restart att-hub-agent
+  systemctl enable att-hub-agent >/dev/null 2>&1 || true
+  systemctl restart att-hub-agent
   sleep 3
   systemctl is-active --quiet att-hub-agent \
     || { journalctl -u att-hub-agent -n 20 --no-pager; die "agent 启动失败"; }
@@ -316,20 +328,40 @@ usage(){
   cat <<EOF
 att-tunnel-hub v$VERSION—转发机统一管理整合项目
 
-  机器1 面板机：   bash install.sh --panel
-  机器2/3 转发机： bash install.sh --forwarder <面板地址> <token>
-                      （这条由面板「添加转发机」自动生成，不用手敲）
+  机器1 面板机：   ./install.sh --panel
+  机器2/3 转发机： ./install.sh -a <面板地址> -s <密钥> [-d <伪装域名>]
+                      （这条由面板「添加转发机」自动生成，复制粘贴即可，全程零交互）
   落地机：         在面板里进对应转发机 →「管理落地机」→「＋ 添加节点」生成命令
 
+  -d 不填时用 $DEFAULT_SNI；它不可用时 att-tunnel 自动换预置列表里可用的。
   装完面板机后用 ${CYN}att-hub${RST} 看地址/改密码/重启/卸载。
 EOF
 }
 
 need_root
-case "${1:-}" in
-  --panel|--hub|--server-1) install_panel; install_cli ;;
-  --forwarder|--fwd)        install_forwarder "${2:-}" "${3:-}" ;;
-  --version|-v)             echo "$VERSION" ;;
-  --help|-h|'')             usage ;;
-  *)                        die "未知参数：$1（可用：--panel | --forwarder <地址> <token>）" ;;
+
+# 参数：以 duola 那种方式为准（-a 地址 -s 密钥），全程不问任何问题。
+# 旧式 --forwarder <地址> <密钥> 照旧能用，免得已发出去的命令失效。
+MODE=""; HUB_ADDR=""; HUB_SECRET=""; SNI_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -a|--addr|--hub-url)  HUB_ADDR="${2:-}"; MODE="${MODE:-forwarder}"; shift 2 ;;
+    -s|--secret|--token)  HUB_SECRET="${2:-}"; MODE="${MODE:-forwarder}"; shift 2 ;;
+    -d|--sni|--domain)    SNI_ARG="${2:-}"; shift 2 ;;
+    --panel|--hub|--server-1) MODE=panel; shift ;;
+    --forwarder|--fwd)
+      MODE=forwarder
+      [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && { HUB_ADDR="$2"; shift; }
+      [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && { HUB_SECRET="$2"; shift; }
+      shift ;;
+    --version|-v)         echo "$VERSION"; exit 0 ;;
+    --help|-h)            usage; exit 0 ;;
+    *)                    die "未知参数：$1（用 --help 看用法）" ;;
+  esac
+done
+
+case "$MODE" in
+  panel)     install_panel; install_cli ;;
+  forwarder) install_forwarder "$HUB_ADDR" "$HUB_SECRET" "$SNI_ARG" ;;
+  *)         usage ;;
 esac

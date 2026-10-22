@@ -28,16 +28,22 @@
 ### 1. 面板机（机器1）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh) --panel
+curl -L https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh --panel
 ```
 
 装完会打印面板地址和密码。面板默认用随机端口 + 随机根路径 + 随机密码。
 
 ### 2. 转发机（机器2、机器3）
 
-不用手敲命令。登录面板 →「＋ 添加转发机」填公网 IP → 面板生成该机专属的一键代码 → 用 root 在那台机器上跑。
+不用手敲命令。登录面板 →「＋ 添加转发机」填公网 IP → 面板生成该机专属的一键代码 → 用 root 在那台机器上跑：
 
-它会装好 att-tunnel 入口端和 agent，装完面板里这台就变成「在线」。
+```bash
+curl -L .../install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh -a <面板地址> -s <密钥>
+```
+
+**全程零交互**，不会问伪装域名、不会问端口、不用选任何东西。伪装域名由脚本自己定（默认 `www.atlasobscura.com`，不可用时 att-tunnel 自动换成预置列表里可用的那个）；要指定就加 `-d <域名>`。
+
+它会装好 att-tunnel 入口端和 agent，装完面板里这台就变成「在线」。本机已经在跑 att-tunnel 的话不重装，现有节点和分享链接都不动。
 
 ### 3. 落地机（若干台）
 
