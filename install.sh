@@ -10,7 +10,7 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 # att-tunnel 网页面板（--web）在 v2.2.0 才有，目前还在 PR #2 分支上，main 仍是 v2.0.0。
 # 先固定到 v2.2.0 的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/1527494437763cb4e3d4e9360657cf9994a6596d/install.sh}"

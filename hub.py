@@ -157,6 +157,34 @@ def fwd_del(name):
         safe_save()
     return rec
 
+def fwd_edit(old, new_name, ip, note):
+    """改名称 / IP / 备注。
+
+    token 不动，所以改名不用重装 agent：agent 是拿 token 鉴权的，不认名字。
+    但转发机在 state 和 Bus 待办队列里都是按名字做键的，所以要一并迁。
+    """
+    with lock:
+        rec = state['forwarders'].get(old)
+        if not rec:
+            return None, '转发机 %s 不存在' % old
+        renamed = new_name != old
+        if renamed and new_name in state['forwarders']:
+            return None, '名称 %s 已被占用' % new_name
+        rec['ip'] = ip
+        rec['note'] = note
+        if renamed:
+            rec['name'] = new_name
+            # 按顺序重建，保持卡片次序稳定
+            items = [(new_name, rec) if k == old else (k, v)
+                     for k, v in state['forwarders'].items()]
+            state['forwarders'] = dict(items)
+    if renamed:
+        # 旧名下还没回包的代理请求已经指不到人了，放掉让前端重试新路径
+        bus.drop(old)
+    safe_save()
+    return rec, None
+
+
 # ---------------------------------------------------------------- 请求中转总线
 # 面板 -> agent 的唯一通道：agent long-poll 取走一个待办 HTTP 请求，
 # 在本机打给 att-tunnel 面板，再 POST 回响应。没有任意命令执行通道。
@@ -371,10 +399,20 @@ PAGE_MAIN += '''
 <label for="dName">输入名称确认：<b id="dWho"></b></label><input id="dName" name="confirm" required autocomplete="off">
 </div><div class="df"><button class="btn" type="button" id="dCancel">取消</button>
 <button class="btn d" id="dOk" type="submit">确认删除</button></div></form></dialog>
+
+<dialog id="dEdit" aria-labelledby="dEditH"><form id="fEdit" method="dialog"><div class="dh" id="dEditH">编辑转发机</div><div class="db">
+<p class="mut" style="font-size:13px">密钥不变，所以改完<b>不用重装</b>，转发机上的 agent 和落地机都不受影响。<br>IP 只是面板里的备忘记录，改它不会去改那台机器的配置。</p>
+<input type="hidden" id="eOld" name="name">
+<label for="eName">名称</label><input id="eName" name="new_name" required pattern="[A-Za-z0-9_-]{1,32}">
+<label for="eIp">公网 IP 或域名</label><input id="eIp" name="ip" required>
+<label for="eNote">备注（可空）</label><input id="eNote" name="note">
+</div><div class="df"><button class="btn" type="button" id="eCancel">取消</button>
+<button class="btn p" id="eOk" type="submit">保存</button></div></form></dialog>
 '''
 PAGE_MAIN += '''
 <script>
 const P="{P}", C="{C}";
+let FWD=[];
 const $=s=>document.querySelector(s);
 function toast(m,k){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
   $("#toasts").appendChild(d);setTimeout(()=>d.remove(),4200);}
@@ -403,6 +441,7 @@ function card(f){
     +'<dt>最后上报</dt><dd>'+ago(f.last_seen)+'</dd>'
     +(a.ver?'<dt>版本</dt><dd>att-tunnel '+esc(a.ver)+'</dd>':'')+'</dl>'
     +'<div class="nact">'+manage
+    +'<button class="btn s" type="button" data-edit="'+esc(f.name)+'">编辑</button>'
     +'<button class="btn s" type="button" data-cmd="'+esc(f.name)+'">一键代码</button>'
     +'<button class="btn d s" type="button" data-del="'+esc(f.name)+'">删除</button></div></div>';
 }
@@ -412,6 +451,7 @@ async function load(){
     if(r.status===401){location.href=P+"/";return;}
     const d=await r.json();
     const fs=d.forwarders||[], on=fs.filter(f=>f.online).length;
+    FWD=fs;
     const nodes=fs.reduce((s,f)=>s+(parseInt((f.agent||{}).nodes,10)||0),0);
     $("#sum").innerHTML=
       '<div class="card"><span class="mut">转发机</span><b>'+fs.length+'</b></div>'
@@ -426,6 +466,11 @@ async function load(){
       try{const j=await api("/api/cmd",{name:b.dataset.cmd});showCmd(j.cmd);}catch(e){toast(e.message,"bad");}});
     $("#list").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
       $("#dWho").textContent=b.dataset.del;$("#dName").value="";$("#dDel").showModal();});
+    $("#list").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{
+      const f=(FWD||[]).find(x=>x.name===b.dataset.edit);if(!f)return;
+      $("#eOld").value=f.name;$("#eName").value=f.name;
+      $("#eIp").value=f.ip;$("#eNote").value=f.note||"";
+      $("#dEdit").showModal();});
   }catch(e){$("#err").textContent="读取状态失败："+e.message;$("#err").style.display="block";}
 }
 load();setInterval(load,10000);
@@ -435,6 +480,7 @@ $("#cmdClose").onclick=()=>$("#dCmd").close();
 $("#bAdd").onclick=()=>{$("#fAdd").reset();$("#dAdd").showModal();};
 $("#aCancel").onclick=()=>$("#dAdd").close();
 $("#dCancel").onclick=()=>$("#dDel").close();
+$("#eCancel").onclick=()=>$("#dEdit").close();
 $("#bRef").onclick=()=>load();
 $("#fAdd").onsubmit=async e=>{e.preventDefault();const b=$("#aOk");b.disabled=true;
   try{const j=await api("/api/add",{name:$("#aName").value.trim(),ip:$("#aIp").value.trim(),note:$("#aNote").value.trim()});
@@ -442,6 +488,11 @@ $("#fAdd").onsubmit=async e=>{e.preventDefault();const b=$("#aOk");b.disabled=tr
 $("#fDel").onsubmit=async e=>{e.preventDefault();const b=$("#dOk");b.disabled=true;
   try{await api("/api/del",{name:$("#dWho").textContent,confirm:$("#dName").value.trim()});
     $("#dDel").close();toast("已删除","ok");load();}catch(err){toast(err.message,"bad");}finally{b.disabled=false;}};
+$("#fEdit").onsubmit=async e=>{e.preventDefault();const b=$("#eOk");b.disabled=true;
+  try{const j=await api("/api/edit",{name:$("#eOld").value,new_name:$("#eName").value.trim(),
+      ip:$("#eIp").value.trim(),note:$("#eNote").value.trim()});
+    $("#dEdit").close();toast(j.renamed?"已保存（已改名，无需重装）":"已保存","ok");load();}
+  catch(err){toast(err.message,"bad");}finally{b.disabled=false;}};
 </script>
 '''
 
@@ -696,6 +747,8 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.redirect(PREFIX + '/', [('Set-Cookie', ck)])
         if r == '/api/add':
             return self.do_add(f)
+        if r == '/api/edit':
+            return self.do_edit(f)
         if r == '/api/cmd':
             rec = fwd_get(f.get('name', ''))
             if not rec:
@@ -722,6 +775,20 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.jsend(409, {'error': '转发机 %s 已存在' % name})
         rec = fwd_add(name, ip, note)
         return self.jsend(200, {'ok': True, 'name': name, 'cmd': agent_cmd(rec)})
+
+    def do_edit(self, f):
+        old = f.get('name', '').strip()
+        new_name = f.get('new_name', '').strip() or old
+        ip = f.get('ip', '').strip()
+        note = f.get('note', '').strip()[:64]
+        if not NAME_RE.match(new_name):
+            return self.jsend(400, {'error': '名称只能用字母/数字/下划线/连字符，最多 32 位'})
+        if not IP_RE.match(ip):
+            return self.jsend(400, {'error': 'IP 或域名格式不对'})
+        rec, err = fwd_edit(old, new_name, ip, note)
+        if err:
+            return self.jsend(409 if '占用' in err else 404, {'error': err})
+        return self.jsend(200, {'ok': True, 'name': new_name, 'renamed': new_name != old})
 
 class Srv(http.server.ThreadingHTTPServer):
     daemon_threads = True
