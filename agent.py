@@ -12,6 +12,7 @@ import os
 import re
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -78,10 +79,12 @@ def node_count():
             d = json.load(f)
     except (OSError, ValueError):
         return None
+    # 与 att-tunnel list_exits 同一口径：user-in（主入口）和 user-in-<端口> 里的 clients 就是节点
     n = 0
     for ib in d.get('inbounds', []):
-        if str(ib.get('tag', '')).startswith('portal-'):
-            n += 1
+        tag = str(ib.get('tag', ''))
+        if tag == 'user-in' or tag.startswith('user-in-'):
+            n += len((ib.get('settings') or {}).get('clients') or [])
     return n
 
 # ---------------------------------------------------------------- 本机 att-tunnel 面板会话
@@ -92,6 +95,7 @@ class Local:
         self.cookie = ''
         self.csrf = ''
         self.web = None
+        self.lock = threading.Lock()     # 多个请求并发时，登录只做一次
 
     def base(self):
         self.web = local_web()
@@ -114,7 +118,7 @@ class Local:
         req.add_header('Origin', 'http://127.0.0.1:%d' % self.web['port'])
         req.add_header('Sec-Fetch-Site', 'same-origin')
         try:
-            with urllib.request.urlopen(req, timeout=240) as r:
+            with urllib.request.urlopen(req, timeout=270) as r:
                 return (r.status, r.read().decode('utf-8', 'replace'),
                         r.headers.get('Content-Type') or 'text/html; charset=utf-8')
         except urllib.error.HTTPError as e:
@@ -169,8 +173,9 @@ def handle(job):
         path = '/' + path
     body = job.get('body') or ''
     ctype = job.get('ctype') or ''
-    if not local.cookie:
-        local.login()
+    with local.lock:
+        if not local.cookie:
+            local.login()
     # 本机面板的 CSRF 由 agent 自己的会话提供：把表单/JSON 里的 csrf 换成本地值
     if method == 'POST':
         d = dict(urllib.parse.parse_qsl(body, keep_blank_values=True))
@@ -180,8 +185,9 @@ def handle(job):
     st, text, rct = local.req(method, path, body if method == 'POST' else None, ctype)
     if st in (401, 403):
         # 会话过期或 CSRF 对不上：重登一次再试
-        local.cookie = ''
-        local.login()
+        with local.lock:
+            local.cookie = ''
+            local.login()
         if method == 'POST':
             d = dict(urllib.parse.parse_qsl(body, keep_blank_values=True))
             d['csrf'] = local.csrf
@@ -205,6 +211,22 @@ def heartbeat_fields():
     return f
 
 
+def run_job(job):
+    try:
+        resp = handle(job)
+    except Exception as e:
+        log('执行请求失败:', e)
+        resp = {'status': 502,
+                'body': '<p class="err">转发机本地面板调用失败：%s</p>' % e,
+                'ctype': 'text/html; charset=utf-8'}
+    try:
+        hub_post('/agent/reply', {'token': TOKEN, 'job': job['id'],
+                                  'status': str(resp['status']),
+                                  'body': resp['body'], 'ctype': resp['ctype']}, 60)
+    except Exception as e:
+        log('回包失败:', e)
+
+
 def main():
     log('att-hub-agent v%s 启动，面板 %s' % (VERSION, HUB))
     back = 1
@@ -216,19 +238,8 @@ def main():
             job = d.get('job')
             if not job:
                 continue
-            try:
-                resp = handle(job)
-            except Exception as e:
-                log('执行请求失败:', e)
-                resp = {'status': 502,
-                        'body': '<p class="err">转发机本地面板调用失败：%s</p>' % e,
-                        'ctype': 'text/html; charset=utf-8'}
-            try:
-                hub_post('/agent/reply', {'token': TOKEN, 'job': job['id'],
-                                          'status': str(resp['status']),
-                                          'body': resp['body'], 'ctype': resp['ctype']}, 60)
-            except Exception as e:
-                log('回包失败:', e)
+            # 每个请求一个线程：加落地机要跑几分钟，期间照样继续 poll（心跳不断、状态刷新不卡）
+            threading.Thread(target=run_job, args=(job,), daemon=True).start()
         except KeyboardInterrupt:
             return
         except Exception as e:

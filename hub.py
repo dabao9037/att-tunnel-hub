@@ -29,7 +29,7 @@ ENVF = os.environ.get('HUB_ENV', '/etc/att-hub/hub.env')
 STATEF = os.environ.get('HUB_STATE', '/var/lib/att-hub/state.json')
 SESSION_TTL = 12 * 3600
 POLL_WAIT = 25.0          # agent long-poll 挂起上限
-REQ_TIMEOUT = 45.0        # 代理请求等 agent 回包的上限
+REQ_TIMEOUT = 280.0       # 代理请求等 agent 回包的上限（att-tunnel 加节点脚本最长 240s）
 OFFLINE_AFTER = 45        # 超过这么多秒没 poll 视为离线
 NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
 IP_RE = re.compile(r'^[A-Za-z0-9.:_-]{3,253}$')
@@ -603,10 +603,16 @@ class H(http.server.BaseHTTPRequestHandler):
         body = resp.get('body') or ''
         ctype = resp.get('ctype') or 'text/html; charset=utf-8'
         if 'html' in ctype:
-            # 把 att-tunnel 面板自己的根路径改成面板机上的代理路径
+            # 把 att-tunnel 面板自己的根路径改成面板机上的代理路径。
+            # 必须同时管两种形式：
+            #   "<p>/login"（带斜杠，表单 action / 链接）
+            #   "<p>"（不带斜杠，如 JS 里的 const P="<p>"）
+            # 漏了后者的话，JS 的 fetch(P+"/api/status") 会打到面板机根路径上 404。
             apath = (rec.get('agent') or {}).get('web_path') or ''
             if apath:
-                body = body.replace('"%s/' % apath, '"%s/' % base).replace("'%s/" % apath, "'%s/" % base)
+                for q in ('"', "'"):
+                    body = body.replace(q + apath + '/', q + base + '/')
+                    body = body.replace(q + apath + q, q + base + q)
             body = inject_back(body, base, name)
         return self.send(resp.get('status') or 200, body, ctype)
 

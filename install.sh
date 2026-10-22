@@ -10,8 +10,10 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.0.0"
-ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/main/install.sh}"
+VERSION="1.0.1"
+# att-tunnel 网页面板（--web）在 v2.2.0 才有，目前还在 PR #2 分支上，main 仍是 v2.0.0。
+# 先固定到 v2.2.0 的提交；PR #2 合并后改回 main。
+ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/1527494437763cb4e3d4e9360657cf9994a6596d/install.sh}"
 HUB_RAW_URL="${HUB_RAW_URL:-https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh}"
 
 HUB_DIR=/usr/local/lib/att-hub
@@ -78,7 +80,7 @@ fetch_file(){
 install_panel(){
   need_root; install_deps
 
-  local port path pass hub_url
+  local port path pass hub_url listen secure trust
   mkdir -p "$HUB_DIR" "$HUB_ETC" "$HUB_STATE"
   chmod 700 "$HUB_ETC" "$HUB_STATE"
 
@@ -89,13 +91,21 @@ install_panel(){
     port=$(grep -E '^WEB_PORT=' "$HUB_ETC/hub.env" | cut -d= -f2)
     path=$(grep -E '^WEB_PATH=' "$HUB_ETC/hub.env" | cut -d= -f2)
     pass=$(grep -E '^WEB_PASS=' "$HUB_ETC/hub.env" | cut -d= -f2)
+    # 域名/HTTPS 相关设置也要保留，否则升级会把地址打回 IP、把监听放回 0.0.0.0
+    hub_url="${HUB_URL:-$(grep -E '^HUB_URL=' "$HUB_ETC/hub.env" | cut -d= -f2- || true)}"
+    listen="${HUB_LISTEN:-$(grep -E '^WEB_LISTEN=' "$HUB_ETC/hub.env" | cut -d= -f2 || true)}"
+    secure="${HUB_COOKIE_SECURE:-$(grep -E '^WEB_COOKIE_SECURE=' "$HUB_ETC/hub.env" | cut -d= -f2 || true)}"
+    trust="${HUB_TRUST_PROXY:-$(grep -E '^WEB_TRUST_PROXY=' "$HUB_ETC/hub.env" | cut -d= -f2 || true)}"
   else
     port="${HUB_PORT:-$(free_port)}"
     path="${HUB_PATH:-$(rand_hex)}"
     pass="${HUB_PASS:-$(rand_pass)}"
   fi
 
-  hub_url="${HUB_URL:-}"
+  hub_url="${hub_url:-${HUB_URL:-}}"
+  listen="${listen:-${HUB_LISTEN:-0.0.0.0}}"
+  secure="${secure:-${HUB_COOKIE_SECURE:-0}}"
+  trust="${trust:-${HUB_TRUST_PROXY:-0}}"
   if [ -z "$hub_url" ]; then
     local ip; ip=$(pubip) || die "取不到公网 IP，请用 HUB_URL=http://你的IP:端口/路径 指定"
     hub_url="http://$ip:$port/$path"
@@ -109,15 +119,15 @@ WEB_PORT=$port
 WEB_PATH=$path
 WEB_PASS=$pass
 # 默认监听 0.0.0.0；套了 nginx/域名 后改成 127.0.0.1 更安全
-WEB_LISTEN=${HUB_LISTEN:-0.0.0.0}
+WEB_LISTEN=$listen
 # agent 回连用的面板外网地址（带根路径）
 HUB_URL=$hub_url
 # 生成一键代码用的本脚本地址
 HUB_RAW_URL=$HUB_RAW_URL
 # 上了 HTTPS 后改 1
-WEB_COOKIE_SECURE=${HUB_COOKIE_SECURE:-0}
+WEB_COOKIE_SECURE=$secure
 # 在 nginx 后面时改 1，让登录限速看真实 IP
-WEB_TRUST_PROXY=${HUB_TRUST_PROXY:-0}
+WEB_TRUST_PROXY=$trust
 EOF
   chmod 600 "$HUB_ETC/hub.env"
 
@@ -205,40 +215,60 @@ install_forwarder(){
   esac
   hub="${hub%/}"
   install_deps
+  command -v flock >/dev/null 2>&1 || { info "安装 flock"; apt-get install -y -qq util-linux; }
 
-  # 1. 装/备 att-tunnel A 端（入口端）和它自己的面板
-  if [ -f /usr/local/etc/att-tunnel/config.json ]; then
-    ok "本机已有 att-tunnel，不重装"
+  # att-tunnel 脚本：全程用同一份，--server-a 和 --web 都走它。
+  # 注意：att-tunnel 不会在 PATH 里装 CLI，/usr/local/lib/att-tunnel/att-tunnel.sh
+  # 只有开过面板后才存在，所以不能指望「att-tunnel --web」这条命令存在。
+  local att=/tmp/att-tunnel-install.$$.sh
+  curl -fsSL "$ATT_REPO_RAW" -o "$att" || die "下载 att-tunnel 脚本失败（$ATT_REPO_RAW）"
+  bash -n "$att" || { rm -f "$att"; die "att-tunnel 脚本语法检查不通过"; }
+
+  # 1. 本机是否已有 att-tunnel，以哪个角色跑
+  if [ -f /etc/att-tunnel/a.env ]; then
+    ok "本机已在跑 att-tunnel 入口端（A 端），不重装、不动现有节点和分享链接"
+  elif [ -f /etc/att-tunnel/b.env ]; then
+    die "本机是 att-tunnel 出口端（B 端，也就是落地机），不能当转发机。
+落地机不需要跑这条命令，它由对应转发机的面板里「添加节点」生成的命令安装。"
   else
-    info "安装 att-tunnel A 端（入口端）"
-    curl -fsSL "$ATT_REPO_RAW" -o /tmp/att-install.sh || die "下载 att-tunnel 失败"
-    ATT_NONINTERACTIVE=1 bash /tmp/att-install.sh --server-a || die "att-tunnel A 端安装失败"
-    rm -f /tmp/att-install.sh
+    info "本机还没有 att-tunnel，先装入口端（A 端）"
+    ATT_RAW_URL="$ATT_REPO_RAW" bash "$att" --server-a || { rm -f "$att"; die "att-tunnel A 端安装失败"; }
   fi
 
-  # 2. 确保 att-tunnel 自带面板已开（转发机加/删落地机的页面就是它）
-  if [ ! -f /etc/att-tunnel/web.env ]; then
-    info "开启 att-tunnel 本机面板"
-    att-tunnel --web >/dev/null 2>&1 || att_web_fallback
+  # 2. 开 att-tunnel 自带面板（转发机加/删落地机的页面就是它）
+  #    已经开过也再跑一次：幂等，顺便把面板程序和脚本副本刷到当前版本
+  if [ -f /etc/att-tunnel/web.env ]; then
+    info "att-tunnel 面板已开过，刷新到当前版本（端口/路径/密码保留）"
+  else
+    warn "首次开面板要启用流量统计，att-tunnel 会重启，现有连接会断几秒"
+    warn "（分享链接、节点配置、落地机那边都不变，断完自动恢复）"
   fi
+  # ATT_RAW_URL：让面板里生成的落地机命令也指向同一版本脚本
+  ATT_RAW_URL="$ATT_REPO_RAW" ATT_NONINTERACTIVE=1 bash "$att" --web >/tmp/att-web.$$.log 2>&1 || {
+    tail -15 /tmp/att-web.$$.log; rm -f /tmp/att-web.$$.log "$att"
+    die "开启 att-tunnel 面板失败"; }
+  rm -f /tmp/att-web.$$.log "$att"
   [ -f /etc/att-tunnel/web.env ] || die "att-tunnel 面板未开启成功"
+  ok "att-tunnel 面板就绪"
   # 本机面板只给 agent 用，收回到 127.0.0.1，不对外暴露
   harden_att_web
 
   # 3. 装 agent
   mkdir -p "$AG_DIR" "$AG_ETC"; chmod 700 "$AG_ETC"
   fetch_file agent.py "$AG_DIR/agent.py"
+  umask 077
   cat > "$AG_ETC/agent.env" <<EOF
 # att-hub-agent 配置（v$VERSION）
 HUB_URL=$hub
 HUB_TOKEN=$token
 EOF
+  umask 022
   chmod 600 "$AG_ETC/agent.env"
 
   write_agent_unit
   systemctl daemon-reload
   systemctl enable --now att-hub-agent >/dev/null 2>&1 || systemctl restart att-hub-agent
-  sleep 2
+  sleep 3
   systemctl is-active --quiet att-hub-agent \
     || { journalctl -u att-hub-agent -n 20 --no-pager; die "agent 启动失败"; }
 
@@ -246,12 +276,6 @@ EOF
   ok "转发机安装完成，已回连面板 $hub"
   echo "回面板刷新，这台应该变成「在线」；点「管理落地机」就是 att-tunnel 原生页面。"
   echo "日志：${CYN}journalctl -u att-hub-agent -f${RST}"
-}
-
-att_web_fallback(){
-  [ -f /usr/local/lib/att-tunnel/att-tunnel.sh ] \
-    && bash /usr/local/lib/att-tunnel/att-tunnel.sh --web >/dev/null 2>&1 \
-    || die "无法开启 att-tunnel 面板，请先在本机跑 att-tunnel 菜单里的「网页面板」"
 }
 
 # 转发机本机的 att-tunnel 面板只服务 agent，收到 127.0.0.1
