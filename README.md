@@ -45,6 +45,8 @@ curl -L .../install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh 
 
 它会装好 att-tunnel 入口端和 agent，装完面板里这台就变成「在线」。本机已经在跑 att-tunnel 的话不重装，现有节点和分享链接都不动。
 
+新装的转发机以**零节点**起步：att-tunnel 装入口端时会在配置里自建一个默认节点 `node1`，脚本会把它删掉，节点由你自己在面板里加。想保留那个默认节点就加环境变量 `ATT_HUB_KEEP_NODE=1`。
+
 ### 3. 落地机（若干台）
 
 面板里点转发机的「管理落地机」→ 进入该机 att-tunnel 原生面板 →「＋ 添加节点」→ 复制生成的命令，在落地机上跑。

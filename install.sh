@@ -10,7 +10,7 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 # att-tunnel 网页面板（--web）在 v2.2.0 才有，目前还在 PR #2 分支上，main 仍是 v2.0.0。
 # 先固定到 v2.2.0 的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/1527494437763cb4e3d4e9360657cf9994a6596d/install.sh}"
@@ -232,6 +232,7 @@ install_forwarder(){
   bash -n "$att" || { rm -f "$att"; die "att-tunnel 脚本语法检查不通过"; }
 
   # 1. 本机是否已有 att-tunnel，以哪个角色跑
+  local fresh=0
   if [ -f /etc/att-tunnel/a.env ]; then
     ok "本机已在跑 att-tunnel 入口端（A 端），不重装、不动现有节点和分享链接"
   elif [ -f /etc/att-tunnel/b.env ]; then
@@ -244,6 +245,24 @@ install_forwarder(){
     # 不支持 TLS 1.3 就自动改用它自己的预置列表逐个试，仍然不用人管。
     ATT_RAW_URL="$ATT_REPO_RAW" ATT_NONINTERACTIVE=1 ATT_SNI="${sni:-$DEFAULT_SNI}" \
       bash "$att" --server-a || { rm -f "$att"; die "att-tunnel A 端安装失败"; }
+    fresh=1
+  fi
+
+  # 1b. att-tunnel 装入口端时会在配置模板里写死一个节点 node1（并绑一个空出口）。
+  # 这不是面板加的，但结果是“添加转发机就白送一个节点”。默认把它删掉，
+  # 让转发机以零节点干净起步，节点由你自己在面板里加。
+  # 零节点配置是合法的：主入口端口保留、clients 为空，xray -test 和 att-tunnel 自检都过。
+  # 只在本次新装时做；本机原有 att-tunnel 的话绝不动它的节点。
+  if [ "$fresh" = 1 ] && [ "${ATT_HUB_KEEP_NODE:-0}" != 1 ]; then
+    info "移除 att-tunnel 自建的默认节点 node1（节点由你在面板里自己加）"
+    if ATT_RAW_URL="$ATT_REPO_RAW" ATT_NONINTERACTIVE=1 ATT_YES=1 \
+         bash "$att" --del node1 >/tmp/att-del.$$.log 2>&1; then
+      ok "已移除默认节点，这台转发机现在是零节点"
+    else
+      warn "默认节点 node1 没删掉（不影响使用，你可以在面板里手动删）："
+      tail -5 /tmp/att-del.$$.log | sed 's/^/    /'
+    fi
+    rm -f /tmp/att-del.$$.log
   fi
 
   # 2. 开 att-tunnel 自带面板（转发机加/删落地机的页面就是它）
