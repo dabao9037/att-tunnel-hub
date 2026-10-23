@@ -24,7 +24,10 @@ WEBENV = os.environ.get('ATT_WEB_ENV', '/etc/att-tunnel/web.env')
 CFG = os.environ.get('ATT_CFG', '/usr/local/etc/att-tunnel/config.json')
 POLL_TIMEOUT = 35
 BACKOFF_MAX = 60
+NET_SAMPLE = 5          # 网速采样间隔（秒）
 CSRF_RE = re.compile(r'name="csrf" value="([^"]+)"')
+# 虚拟网卡：统计本机对外网速时要排除，否则重复计数
+SKIP_IF = ('lo', 'docker', 'veth', 'br-', 'virbr', 'tun', 'tap', 'wg', 'sit', 'dummy')
 
 
 def log(*a):
@@ -86,6 +89,80 @@ def node_count():
         if tag == 'user-in' or tag.startswith('user-in-'):
             n += len((ib.get('settings') or {}).get('clients') or [])
     return n
+
+
+# ---------------------------------------------------------------- 本机网速 / 流量
+# 从 /proc/net/dev 读累计字节数，两次采样算速率。只算物理网卡：
+# lo / docker / veth / tun 这类虚拟设备会把同一份流量重复计进来。
+# 累计流量是网卡自开机以来的总量（重启会归零），不是 att-tunnel 的节点计数。
+def net_total():
+    """返回 (rx_bytes, tx_bytes) 累计值；读不到返回 None。"""
+    try:
+        with open('/proc/net/dev') as f:
+            lines = f.readlines()[2:]
+    except OSError:
+        return None
+    rx = tx = 0
+    for line in lines:
+        if ':' not in line:
+            continue
+        name, rest = line.split(':', 1)
+        name = name.strip()
+        if not name or name.startswith(SKIP_IF):
+            continue
+        cols = rest.split()
+        if len(cols) < 9:
+            continue
+        try:
+            rx += int(cols[0])
+            tx += int(cols[8])
+        except ValueError:
+            continue
+    return rx, tx
+
+
+class NetMeter:
+    """后台采样网速。心跳里直接读最近一次的结果，不在请求里做 sleep。"""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.rx = self.tx = 0          # 累计
+        self.rate_rx = self.rate_tx = 0.0   # 字节/秒
+        self.ok = False
+
+    def run(self):
+        last = net_total()
+        last_t = time.monotonic()
+        while True:
+            time.sleep(NET_SAMPLE)
+            cur = net_total()
+            now_t = time.monotonic()
+            if cur is None:
+                with self.lock:
+                    self.ok = False
+                continue
+            dt = now_t - last_t
+            if last is not None and dt > 0:
+                # 网卡计数器归零（重启/网卡重建）时不输出负值
+                drx = max(0, cur[0] - last[0])
+                dtx = max(0, cur[1] - last[1])
+                with self.lock:
+                    self.rx, self.tx = cur
+                    self.rate_rx = drx / dt
+                    self.rate_tx = dtx / dt
+                    self.ok = True
+            last, last_t = cur, now_t
+
+    def snapshot(self):
+        with self.lock:
+            if not self.ok:
+                return None
+            return {'rx': self.rx, 'tx': self.tx,
+                    'rate_rx': round(self.rate_rx, 1),
+                    'rate_tx': round(self.rate_tx, 1)}
+
+
+net = NetMeter()
 
 # ---------------------------------------------------------------- 本机 att-tunnel 面板会话
 # agent 用 web.env 里的密码登录本机面板，自己持一份 cookie 和 CSRF，
@@ -207,6 +284,12 @@ def heartbeat_fields():
     n = node_count()
     if n is not None:
         f['nodes'] = str(n)
+    s = net.snapshot()
+    if s:
+        f['rx'] = str(s['rx'])
+        f['tx'] = str(s['tx'])
+        f['rate_rx'] = str(s['rate_rx'])
+        f['rate_tx'] = str(s['rate_tx'])
     f['ver'] = VERSION
     return f
 
@@ -229,6 +312,7 @@ def run_job(job):
 
 def main():
     log('att-hub-agent v%s 启动，面板 %s' % (VERSION, HUB))
+    threading.Thread(target=net.run, daemon=True).start()
     back = 1
     while True:
         try:

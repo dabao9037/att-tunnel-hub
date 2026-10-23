@@ -481,6 +481,8 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;",
 function ago(t){if(!t)return "从未";const s=Math.max(0,Math.floor(Date.now()/1000)-t);
   if(s<60)return s+" 秒前";if(s<3600)return Math.floor(s/60)+" 分钟前";
   if(s<86400)return Math.floor(s/3600)+" 小时前";return Math.floor(s/86400)+" 天前";}
+function fb(n){n=+n||0;const u=["B","KB","MB","GB","TB","PB"];let i=0;
+  while(n>=1024&&i<5){n/=1024;i++}return(i?n.toFixed(n<10?2:n<100?1:0):n)+" "+u[i];}
 async function api(path,data){
   const r=await fetch(P+path,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":C},
     body:new URLSearchParams(Object.assign({csrf:C},data||{}))});
@@ -499,6 +501,12 @@ function card(f){
     +'<dl class="kv"><dt>IP</dt><dd class="mono">'+esc(f.ip)+'</dd>'
     +(f.note?'<dt>备注</dt><dd>'+esc(f.note)+'</dd>':'')
     +'<dt>落地机</dt><dd>'+(a.nodes!==undefined?esc(a.nodes)+' 个':'—')+'</dd>'
+    +'<dt>实时网速</dt><dd>'+(a.rate_rx!==undefined
+        ?'↓ '+fb(a.rate_rx)+'/s　↑ '+fb(a.rate_tx)+'/s'
+        :'<span class="mut">—</span>')+'</dd>'
+    +'<dt>累计流量</dt><dd>'+(a.rx!==undefined
+        ?'↓ '+fb(a.rx)+'　↑ '+fb(a.tx)+'<div class="mut" style="font-size:12px">网卡总量，重启后归零</div>'
+        :'<span class="mut">—</span>')+'</dd>'
     +'<dt>最后上报</dt><dd>'+ago(f.last_seen)+'</dd>'
     +(a.ver?'<dt>版本</dt><dd>att-tunnel '+esc(a.ver)+'</dd>':'')+'</dl>'
     +'<div class="nact">'+manage
@@ -779,7 +787,8 @@ class H(http.server.BaseHTTPRequestHandler):
             with lock:
                 rec['last_seen'] = now()
                 info = {}
-                for k in ('web', 'web_path', 'ver', 'ip', 'nodes', 'xray'):
+                for k in ('web', 'web_path', 'ver', 'ip', 'nodes', 'xray',
+                          'rx', 'tx', 'rate_rx', 'rate_tx'):
                     if k in f:
                         info[k] = f[k]
                 if info:
