@@ -32,6 +32,7 @@ POLL_WAIT = 25.0          # agent long-poll 挂起上限
 REQ_TIMEOUT = 280.0       # 代理请求等 agent 回包的上限（att-tunnel 加节点脚本最长 240s）
 OFFLINE_AFTER = 45        # 超过这么多秒没 poll 视为离线
 NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
+SUB_RE = re.compile(r'^[A-Za-z0-9_-]{20,64}$')     # att-tunnel 面板的订阅 token
 IP_RE = re.compile(r'^[A-Za-z0-9.:_-]{3,253}$')
 
 
@@ -871,9 +872,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.jsend(401, {'error': 'unauthorized'})
             return self.jsend(200, collect_nodes())
         if r.startswith('/f/'):
-            if not s:
-                return self.redirect(PREFIX + '/')
             parts = r[3:].split('/', 1)
+            # 节点订阅：<根路径>/f/<转发机>/sub/<token> 免登录（客户端定时拉取），
+            # token 由转发机本机面板校验；这里只放行格式正确的请求。
+            if not s:
+                rest = parts[1] if len(parts) > 1 else ''
+                if (NAME_RE.match(parts[0]) and rest.startswith('sub/')
+                        and SUB_RE.match(rest[4:])):
+                    return self.do_proxy(parts[0], '/' + rest, 'GET', b'')
+                return self.redirect(PREFIX + '/')
             name = parts[0]
             rest = '/' + (parts[1] if len(parts) > 1 else '')
             q = urllib.parse.urlsplit(self.path).query
