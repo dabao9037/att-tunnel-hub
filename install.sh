@@ -10,10 +10,10 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.7.0"
+VERSION="1.7.1"
 # att-tunnel 网页面板（--web）和「添加节点可填 SSH 直装出口机」都还在 PR #2 分支上，
 # main 仍是 v2.0.0。先固定到含 SSH 直装和链接二维码 / 订阅的提交；PR #2 合并后改回 main。
-ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/007c4fe7c387c736dbe8f49c16be6b82b355c88a/install.sh}"
+ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/a6be642267449948fc1b7dfdbcd8d4415029b9ba/install.sh}"
 HUB_RAW_URL="${HUB_RAW_URL:-https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh}"
 # 转发机装 att-tunnel 入口端时用的 REALITY 伪装域名。取 att-tunnel 预置列表第一个；
 # 万一它不支持 TLS 1.3，att-tunnel 自己会换成预置列表里可用的那个，不会回头问人。
@@ -246,6 +246,12 @@ install_forwarder(){
     ATT_RAW_URL="$ATT_REPO_RAW" ATT_NONINTERACTIVE=1 ATT_SNI="${sni:-$DEFAULT_SNI}" \
       bash "$att" --server-a || { rm -f "$att"; die "att-tunnel A 端安装失败"; }
     fresh=1
+  fi
+
+  # 1a. TCP 调优（tcp_retries2=5 + BBR）。新装时 --server-a 已做过；
+  # 老转发机重跑本命令也补上。A 端不重启 att-tunnel，新连接即用 BBR。
+  if [ "$fresh" = 0 ]; then
+    ATT_NONINTERACTIVE=1 bash "$att" --tune || warn "TCP 调优（BBR）没成功，不影响使用"
   fi
 
   # 1b. att-tunnel 装入口端时会在配置模板里写死一个节点 node1（并绑一个空出口）。
