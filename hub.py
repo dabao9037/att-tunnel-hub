@@ -545,7 +545,7 @@ async function load(){
       $("#eIp").value=f.ip;$("#eNote").value=f.note||"";
       $("#dEdit").showModal();});
     $("#list").querySelectorAll("[data-upgrade]").forEach(b=>b.onclick=async()=>{
-      if(!confirm('确认更新转发机「'+b.dataset.upgrade+'」的 att-tunnel 到最新版？\n\n更新期间（约 1-2 分钟），该机的所有落地机会短暂断开，然后自动重连。'))return;
+      if(!confirm('确认更新转发机「'+b.dataset.upgrade+'」的 att-tunnel 到最新版？\\n\\n更新期间（约 1-2 分钟），该机的所有落地机会短暂断开，然后自动重连。'))return;
       const orig=b.textContent;b.disabled=true;b.textContent='更新中…';
       try{
         const j=await api("/api/upgrade",{name:b.dataset.upgrade});
