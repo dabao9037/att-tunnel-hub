@@ -488,6 +488,7 @@ function fb(n){n=+n||0;const u=["B","KB","MB","GB","TB","PB"];let i=0;
 async function api(path,data){
   const r=await fetch(P+path,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":C},
     body:new URLSearchParams(Object.assign({csrf:C},data||{}))});
+  if(r.status===401){location.href=P+"/";return;}
   let j={};try{j=await r.json();}catch(e){}
   if(!r.ok)throw new Error(j.error||("HTTP "+r.status));
   return j;}
