@@ -513,6 +513,7 @@ function card(f){
     +'<div class="nact">'+manage
     +'<button class="btn s" type="button" data-edit="'+esc(f.name)+'">编辑</button>'
     +'<button class="btn s" type="button" data-cmd="'+esc(f.name)+'">一键代码</button>'
+    +(f.online?'<button class="btn s" type="button" data-upgrade="'+esc(f.name)+'">更新</button>':'')
     +'<button class="btn d s" type="button" data-del="'+esc(f.name)+'">删除</button></div></div>';
 }
 async function load(){
@@ -541,6 +542,11 @@ async function load(){
       $("#eOld").value=f.name;$("#eName").value=f.name;
       $("#eIp").value=f.ip;$("#eNote").value=f.note||"";
       $("#dEdit").showModal();});
+    $("#list").querySelectorAll("[data-upgrade]").forEach(b=>b.onclick=async()=>{
+      if(!confirm('确认更新转发机「'+b.dataset.upgrade+'」的 att-tunnel 到最新版？\n\n更新期间（约 1-2 分钟），该机的所有落地机会短暂断开，然后自动重连。'))return;
+      const orig=b.textContent;b.disabled=true;b.textContent='更新中…';
+      try{const j=await api("/api/upgrade",{name:b.dataset.upgrade});toast(j.message||'更新完成','ok');load();}
+      catch(e){toast('更新失败：'+e.message,'bad');}finally{b.disabled=false;b.textContent=orig;}});
   }catch(e){$("#err").textContent="读取状态失败："+e.message;$("#err").style.display="block";}
 }
 load();setInterval(load,10000);
@@ -952,6 +958,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if not fwd_del(name):
                 return self.jsend(404, {'error': '转发机不存在'})
             return self.jsend(200, {'ok': True})
+        if r == '/api/upgrade':
+            return self.do_upgrade(f)
         return self.send(404, 'Not Found', 'text/plain')
 
     def do_add(self, f):
@@ -980,6 +988,27 @@ class H(http.server.BaseHTTPRequestHandler):
         if err:
             return self.jsend(409 if '占用' in err else 404, {'error': err})
         return self.jsend(200, {'ok': True, 'name': new_name, 'renamed': new_name != old})
+
+    def do_upgrade(self, f):
+        """向转发机发送升级命令，让它自己更新 att-tunnel。"""
+        name = f.get('name', '').strip()
+        rec = fwd_get(name)
+        if not rec:
+            return self.jsend(404, {'error': '转发机不存在'})
+        if not fwd_online(rec):
+            return self.jsend(503, {'error': '转发机 %s 不在线，无法更新' % name})
+        # 向转发机的 att-tunnel 面板发送升级请求（特殊路径）
+        req = {'method': 'POST', 'path': '/__upgrade__',
+               'body': '', 'ctype': '', 'csrf': ''}
+        job = bus.submit(name, req)
+        resp = bus.wait(job, REQ_TIMEOUT)
+        if resp is None:
+            return self.jsend(504, {'error': '转发机 %s 没有在 %d 秒内应答' % (name, int(REQ_TIMEOUT))})
+        status = resp.get('status') or 500
+        body = resp.get('body') or ''
+        if status != 200:
+            return self.jsend(status, {'error': body or '更新失败'})
+        return self.jsend(200, {'ok': True, 'message': body or '更新完成'})
 
 class Srv(http.server.ThreadingHTTPServer):
     daemon_threads = True
