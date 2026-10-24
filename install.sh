@@ -10,7 +10,7 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.8.1"
+VERSION="1.8.2"
 # att-tunnel 网页面板（--web）和「添加节点可填 SSH 直装出口机」都还在 PR #2 分支上，
 # main 仍是 v2.0.0。先固定到含 SSH 直装和链接二维码 / 订阅的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/c4fcae1f3bb170dbd6759bc3bd9661276835713d/install.sh}"

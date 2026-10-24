@@ -29,7 +29,8 @@ ENVF = os.environ.get('HUB_ENV', '/etc/att-hub/hub.env')
 STATEF = os.environ.get('HUB_STATE', '/var/lib/att-hub/state.json')
 SESSION_TTL = 12 * 3600
 POLL_WAIT = 25.0          # agent long-poll 挂起上限
-REQ_TIMEOUT = 360.0       # 代理请求等 agent 回包的上限（升级脚本最长 330s，留 30s 缓冲）
+REQ_TIMEOUT = 360.0       # 普通代理请求上限；升级使用独立后台任务
+UPGRADE_TIMEOUT = 420.0   # 下载60s + 安装330s，仅后台等待
 OFFLINE_AFTER = 45        # 超过这么多秒没 poll 视为离线
 NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{20,64}$')     # att-tunnel 面板的订阅 token
@@ -248,6 +249,34 @@ class Bus:
 
 bus = Bus()
 
+
+def finish_upgrade(rec, jid, resp):
+    with lock:
+        u = rec.get('upgrade') or {}
+        if u.get('id') != jid or u.get('state') != 'running':
+            return
+        if resp is None:
+            result, message = 'unknown', '未收到完成回执，请核对转发机日志；不要连续重复更新'
+        elif resp.get('status') == 200:
+            result, message = 'ok', '更新成功（安装脚本已正常完成）'
+        else:
+            result, message = 'error', '更新失败，请检查转发机 agent 日志'
+        # 不保存安装输出，避免凭据进入面板状态。
+        rec['upgrade'] = dict(u, state=result, message=message, finished=now())
+    safe_save()
+
+
+def wait_upgrade(rec, job):
+    finish_upgrade(rec, job['id'], bus.wait(job, UPGRADE_TIMEOUT))
+
+
+def recover_upgrades():
+    # 重启丢失内存总线；在线/版本相同不等于更新成功。
+    for rec in fwd_all().values():
+        u = rec.get('upgrade') or {}
+        if u.get('state') == 'running':
+            finish_upgrade(rec, u['id'], None)
+
 # ---------------------------------------------------------------- 会话 / 限速
 def new_session():
     sid = secrets.token_urlsafe(32)
@@ -285,6 +314,7 @@ def status_json():
             'added': rec.get('added') or 0,
             'agent': rec.get('agent') or {},
             'paneled': bool((rec.get('agent') or {}).get('web')),
+            'upgrade': dict(rec.get('upgrade') or {}),
         })
     return {
         'version': VERSION,
@@ -476,13 +506,13 @@ PAGE_MAIN += '''
 <script>
 const P="{P}", C="{C}";
 let FWD=[];
-const UPGRADES=new Map();
+const UPGRADES=new Map(), SUBMITTING=new Set();
 function upgradeButton(name){
   const u=UPGRADES.get(name);
   return '<button class="btn s" type="button" data-upgrade="'+esc(name)+'"'
     +(u&&u.state==='running'?' disabled':'')
     +(u&&u.state==='ok'?' style="color:#15803d"':'')+'>'
-    +(u?(u.state==='running'?'更新中…':u.state==='ok'?'✓ 更新成功':'更新失败，重试'):'更新')+'</button>';
+    +(u?(u.state==='running'?'更新中…':u.state==='ok'?'✓ 更新成功':u.state==='unknown'?'结果未确认':'更新失败，重试'):'更新')+'</button>';
 }
 const $=s=>document.querySelector(s);
 function toast(m,k,long){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
@@ -519,11 +549,12 @@ function card(f){
         ?'↓ '+fb(a.rx)+'　↑ '+fb(a.tx)+'<div class="mut" style="font-size:12px">网卡总量，重启后归零</div>'
         :'<span class="mut">—</span>')+'</dd>'
     +'<dt>最后上报</dt><dd>'+ago(f.last_seen)+'</dd>'
-    +(a.ver?'<dt>版本</dt><dd>att-tunnel '+esc(a.ver)+'</dd>':'')+'</dl>'
+    +(a.ver?'<dt>管理代理版本</dt><dd>'+esc(a.ver)+'</dd>':'')+'</dl>'
     +'<div class="nact">'+manage
     +'<button class="btn s" type="button" data-edit="'+esc(f.name)+'">编辑</button>'
     +'<button class="btn s" type="button" data-cmd="'+esc(f.name)+'">一键代码</button>'
     +((f.online||UPGRADES.has(f.name))?upgradeButton(f.name):'')
+    +(f.upgrade&&f.upgrade.message?'<div class="mut" style="width:100%;font-size:12px">'+esc(f.upgrade.message)+'</div>':'')
     +'<button class="btn d s" type="button" data-del="'+esc(f.name)+'">删除</button></div></div>';
 }
 async function load(){
@@ -532,6 +563,14 @@ async function load(){
     if(r.status===401){location.href=P+"/";return;}
     const d=await r.json();
     const fs=d.forwarders||[], on=fs.filter(f=>f.online).length;
+    fs.forEach(f=>{
+      const u=f.upgrade, prev=UPGRADES.get(f.name);
+      if(SUBMITTING.has(f.name))return;
+      if(!u||!u.id){if(prev&&prev.id)UPGRADES.delete(f.name);return;}
+      if(prev&&prev.state==='running'&&prev.id===u.id&&u.state!=='running')
+        toast('转发机「'+f.name+'」'+u.message,u.state==='ok'?'ok':'bad',true);
+      UPGRADES.set(f.name,u);
+    });
     FWD=fs;
     const nodes=fs.reduce((s,f)=>s+(parseInt((f.agent||{}).nodes,10)||0),0);
     $("#sum").innerHTML=
@@ -555,18 +594,19 @@ async function load(){
     $("#list").querySelectorAll("[data-upgrade]").forEach(b=>b.onclick=async()=>{
       if(!confirm('确认更新转发机「'+b.dataset.upgrade+'」的 att-tunnel 到最新版？\\n\\n更新期间（约 1-2 分钟），该机的所有落地机会短暂断开，然后自动重连。'))return;
       const name=b.dataset.upgrade;
-      if(UPGRADES.get(name)?.state==='running')return;
+      if(SUBMITTING.has(name)||UPGRADES.get(name)?.state==='running')return;
+      SUBMITTING.add(name);
       UPGRADES.set(name,{state:'running'});
       b.disabled=true;b.textContent='更新中…';
       try{
         const j=await api("/api/upgrade",{name});
-        if(!j||!j.ok)throw new Error('未收到更新成功确认');
-        UPGRADES.set(name,{state:'ok'});
-        toast('✓ 转发机「'+name+'」更新成功，agent 将自动重连','ok',true);
+        if(!j||!j.ok||!j.upgrade)throw new Error('未收到更新任务确认');
+        UPGRADES.set(name,j.upgrade);
+        toast('转发机「'+name+'」更新任务已提交，完成后会显示结果','ok',true);
       }catch(e){
-        UPGRADES.set(name,{state:'error'});
-        toast('✗ 转发机「'+name+'」更新失败：'+e.message,'bad',true);
-      }finally{await load();}
+        UPGRADES.set(name,{state:'unknown'});
+        toast('转发机「'+name+'」更新请求未确认：'+e.message+'；正在读取任务状态','bad',true);
+      }finally{SUBMITTING.delete(name);await load();}
     });
   }catch(e){$("#err").textContent="读取状态失败："+e.message;$("#err").style.display="block";}
 }
@@ -739,6 +779,7 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('X-Content-Type-Options', 'nosniff')
         for k, v in extra:
@@ -1011,25 +1052,25 @@ class H(http.server.BaseHTTPRequestHandler):
         return self.jsend(200, {'ok': True, 'name': new_name, 'renamed': new_name != old})
 
     def do_upgrade(self, f):
-        """向转发机发送升级命令，让它自己更新 att-tunnel。"""
+        """快速创建后台任务；页面轮询持久结果，不占用长连接。"""
         name = f.get('name', '').strip()
         rec = fwd_get(name)
         if not rec:
             return self.jsend(404, {'error': '转发机不存在'})
-        if not fwd_online(rec):
-            return self.jsend(503, {'error': '转发机 %s 不在线，无法更新' % name})
-        # 向转发机的 att-tunnel 面板发送升级请求（特殊路径）
-        req = {'method': 'POST', 'path': '/__upgrade__',
-               'body': '', 'ctype': '', 'csrf': ''}
-        job = bus.submit(name, req)
-        resp = bus.wait(job, REQ_TIMEOUT)
-        if resp is None:
-            return self.jsend(504, {'error': '转发机 %s 没有在 %d 秒内应答' % (name, int(REQ_TIMEOUT))})
-        status = resp.get('status') or 500
-        body = resp.get('body') or ''
-        if status != 200:
-            return self.jsend(status, {'error': body or '更新失败'})
-        return self.jsend(200, {'ok': True, 'message': body or '更新完成'})
+        with lock:
+            u = rec.get('upgrade') or {}
+            if u.get('state') == 'running':
+                return self.jsend(202, {'ok': True, 'upgrade': dict(u)})
+            if not fwd_online(rec):
+                return self.jsend(503, {'error': '转发机 %s 不在线，无法更新' % name})
+            job = bus.submit(name, {'method': 'POST', 'path': '/__upgrade__',
+                                   'body': '', 'ctype': '', 'csrf': ''})
+            rec['upgrade'] = {'id': job['id'], 'state': 'running', 'started': now(),
+                              'message': '更新中，等待转发机完成回执…'}
+            u = dict(rec['upgrade'])
+        safe_save()
+        threading.Thread(target=wait_upgrade, args=(rec, job), daemon=True).start()
+        return self.jsend(202, {'ok': True, 'upgrade': u})
 
 class Srv(http.server.ThreadingHTTPServer):
     daemon_threads = True
@@ -1053,6 +1094,7 @@ def inject_back(html, base, name):
 
 def main():
     load_state()
+    recover_upgrades()
     with lock:
         state['started'] = now()
     log('att-tunnel-hub 面板 v%s 启动，监听 %s:%d，路径 %s' % (VERSION, LISTEN, PORT, PREFIX))
