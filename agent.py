@@ -280,22 +280,46 @@ def handle(job):
 def handle_upgrade():
     """执行升级：从 HUB_URL 重新下载 install.sh 并运行。"""
     import subprocess
+    import tempfile
+    import os
     try:
         hub_url = HUB.rstrip('/')
         script_url = 'https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh'
-        cmd = f'curl -fsSL {script_url} -o ./install.sh && chmod +x ./install.sh && '\
-              f'./install.sh -a "{hub_url}" -s "{TOKEN}"'
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            msg = '升级完成'
-        else:
-            msg = result.stderr or '升级失败'
-        return {'status': 200 if result.returncode == 0 else 500,
-                'body': msg, 'ctype': 'text/plain; charset=utf-8'}
+        
+        # 使用临时目录，避免权限和路径问题
+        with tempfile.TemporaryDirectory(prefix='att-upgrade-') as tmpdir:
+            script_file = os.path.join(tmpdir, 'install.sh')
+            
+            # 下载脚本（用列表避免 shell 注入）
+            dl = subprocess.run(['curl', '-fsSL', script_url, '-o', script_file],
+                              capture_output=True, text=True, timeout=60)
+            if dl.returncode != 0:
+                return {'status': 500, 'body': f'下载失败：{dl.stderr}',
+                        'ctype': 'text/plain; charset=utf-8'}
+            
+            os.chmod(script_file, 0o755)
+            
+            # 运行升级（用列表形式传参，避免引号转义问题）
+            result = subprocess.run(
+                ['/bin/bash', script_file, '-a', hub_url, '-s', TOKEN],
+                capture_output=True, text=True, timeout=270, cwd=tmpdir
+            )
+            
+            if result.returncode == 0:
+                return {'status': 200, 'body': '升级完成',
+                        'ctype': 'text/plain; charset=utf-8'}
+            else:
+                err = result.stderr.strip() or result.stdout.strip() or '升级失败（未知错误）'
+                return {'status': 500, 'body': err,
+                        'ctype': 'text/plain; charset=utf-8'}
+    
     except subprocess.TimeoutExpired:
-        return {'status': 504, 'body': '升级超时', 'ctype': 'text/plain; charset=utf-8'}
+        return {'status': 504, 'body': '升级超时（超过 5 分钟）',
+                'ctype': 'text/plain; charset=utf-8'}
     except Exception as e:
-        return {'status': 500, 'body': f'升级失败：{e}', 'ctype': 'text/plain; charset=utf-8'}
+        log('升级异常:', e)
+        return {'status': 500, 'body': f'升级异常：{str(e)}',
+                'ctype': 'text/plain; charset=utf-8'}
 
 # ---------------------------------------------------------------- 主循环
 def heartbeat_fields():
