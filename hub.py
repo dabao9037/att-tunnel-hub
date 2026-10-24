@@ -426,8 +426,9 @@ dialog::backdrop{background:#0008}.dh{padding:16px 20px;border-bottom:1px solid 
 .db{padding:4px 20px 16px}.df{padding:12px 20px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
 .copy{display:flex;gap:6px;align-items:flex-start;background:var(--bg);border-radius:10px;padding:8px 10px;margin-top:4px}.copy .mono{flex:1}
 #toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9;max-width:min(380px,90vw)}
-.toast{padding:10px 14px;border-radius:12px;color:#fff;background:#0f172a;box-shadow:var(--sh);font-size:14px}
+.toast{padding:10px 14px;border-radius:12px;color:#fff;background:#0f172a;box-shadow:var(--sh);font-size:14px;animation:slideIn 0.3s ease}
 .toast.ok{background:#15803d}.toast.bad{background:#b91c1c}
+@keyframes slideIn{from{transform:translateX(400px);opacity:0}to{transform:translateX(0);opacity:1}}
 @media(max-width:760px){.sum{grid-template-columns:1fr}.wrap{padding:10px}header{padding:14px}}
 </style></head><body><div class="wrap">
 <header class="card"><div><h1>🛰️ att-tunnel-hub <span class="mut" style="font-size:13px;font-weight:400">v{V}</span></h1>
@@ -476,8 +477,8 @@ PAGE_MAIN += '''
 const P="{P}", C="{C}";
 let FWD=[];
 const $=s=>document.querySelector(s);
-function toast(m,k){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
-  $("#toasts").appendChild(d);setTimeout(()=>d.remove(),4200);}
+function toast(m,k,long){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
+  $("#toasts").appendChild(d);setTimeout(()=>d.remove(),long?6500:4200);}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function ago(t){if(!t)return "从未";const s=Math.max(0,Math.floor(Date.now()/1000)-t);
   if(s<60)return s+" 秒前";if(s<3600)return Math.floor(s/60)+" 分钟前";
@@ -545,8 +546,16 @@ async function load(){
     $("#list").querySelectorAll("[data-upgrade]").forEach(b=>b.onclick=async()=>{
       if(!confirm('确认更新转发机「'+b.dataset.upgrade+'」的 att-tunnel 到最新版？\n\n更新期间（约 1-2 分钟），该机的所有落地机会短暂断开，然后自动重连。'))return;
       const orig=b.textContent;b.disabled=true;b.textContent='更新中…';
-      try{const j=await api("/api/upgrade",{name:b.dataset.upgrade});toast(j.message||'更新完成','ok');load();}
-      catch(e){toast('更新失败：'+e.message,'bad');}finally{b.disabled=false;b.textContent=orig;}});
+      try{
+        const j=await api("/api/upgrade",{name:b.dataset.upgrade});
+        toast('✓ 转发机「'+b.dataset.upgrade+'」更新完成','ok',true);
+        b.textContent='✓ 已更新';b.style.color='#15803d';
+        setTimeout(()=>{b.textContent=orig;b.style.color='';b.disabled=false;},3000);
+        load();
+      }catch(e){
+        toast('✗ 转发机「'+b.dataset.upgrade+'」更新失败：'+e.message,'bad',true);
+        b.disabled=false;b.textContent=orig;
+      }});
   }catch(e){$("#err").textContent="读取状态失败："+e.message;$("#err").style.display="block";}
 }
 load();setInterval(load,10000);
