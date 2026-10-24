@@ -302,7 +302,7 @@ def handle_upgrade():
             # 运行升级（用列表形式传参，避免引号转义问题）
             result = subprocess.run(
                 ['/bin/bash', script_file, '-a', hub_url, '-s', TOKEN],
-                capture_output=True, text=True, timeout=270, cwd=tmpdir
+                capture_output=True, text=True, timeout=330, cwd=tmpdir
             )
             
             if result.returncode == 0:
@@ -314,7 +314,7 @@ def handle_upgrade():
                         'ctype': 'text/plain; charset=utf-8'}
     
     except subprocess.TimeoutExpired:
-        return {'status': 504, 'body': '升级超时（超过 5 分钟）',
+        return {'status': 504, 'body': '升级超时（超过 5.5 分钟）',
                 'ctype': 'text/plain; charset=utf-8'}
     except Exception as e:
         log('升级异常:', e)
