@@ -476,6 +476,14 @@ PAGE_MAIN += '''
 <script>
 const P="{P}", C="{C}";
 let FWD=[];
+const UPGRADES=new Map();
+function upgradeButton(name){
+  const u=UPGRADES.get(name);
+  return '<button class="btn s" type="button" data-upgrade="'+esc(name)+'"'
+    +(u&&u.state==='running'?' disabled':'')
+    +(u&&u.state==='ok'?' style="color:#15803d"':'')+'>'
+    +(u?(u.state==='running'?'更新中…':u.state==='ok'?'✓ 更新成功':'更新失败，重试'):'更新')+'</button>';
+}
 const $=s=>document.querySelector(s);
 function toast(m,k,long){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
   $("#toasts").appendChild(d);setTimeout(()=>d.remove(),long?6500:4200);}
@@ -515,7 +523,7 @@ function card(f){
     +'<div class="nact">'+manage
     +'<button class="btn s" type="button" data-edit="'+esc(f.name)+'">编辑</button>'
     +'<button class="btn s" type="button" data-cmd="'+esc(f.name)+'">一键代码</button>'
-    +(f.online?'<button class="btn s" type="button" data-upgrade="'+esc(f.name)+'">更新</button>':'')
+    +((f.online||UPGRADES.has(f.name))?upgradeButton(f.name):'')
     +'<button class="btn d s" type="button" data-del="'+esc(f.name)+'">删除</button></div></div>';
 }
 async function load(){
@@ -546,17 +554,20 @@ async function load(){
       $("#dEdit").showModal();});
     $("#list").querySelectorAll("[data-upgrade]").forEach(b=>b.onclick=async()=>{
       if(!confirm('确认更新转发机「'+b.dataset.upgrade+'」的 att-tunnel 到最新版？\\n\\n更新期间（约 1-2 分钟），该机的所有落地机会短暂断开，然后自动重连。'))return;
-      const orig=b.textContent;b.disabled=true;b.textContent='更新中…';
+      const name=b.dataset.upgrade;
+      if(UPGRADES.get(name)?.state==='running')return;
+      UPGRADES.set(name,{state:'running'});
+      b.disabled=true;b.textContent='更新中…';
       try{
-        const j=await api("/api/upgrade",{name:b.dataset.upgrade});
-        toast('✓ 转发机「'+b.dataset.upgrade+'」更新完成','ok',true);
-        b.textContent='✓ 已更新';b.style.color='#15803d';
-        setTimeout(()=>{b.textContent=orig;b.style.color='';b.disabled=false;},3000);
-        load();
+        const j=await api("/api/upgrade",{name});
+        if(!j||!j.ok)throw new Error('未收到更新成功确认');
+        UPGRADES.set(name,{state:'ok'});
+        toast('✓ 转发机「'+name+'」更新成功，agent 将自动重连','ok',true);
       }catch(e){
-        toast('✗ 转发机「'+b.dataset.upgrade+'」更新失败：'+e.message,'bad',true);
-        b.disabled=false;b.textContent=orig;
-      }});
+        UPGRADES.set(name,{state:'error'});
+        toast('✗ 转发机「'+name+'」更新失败：'+e.message,'bad',true);
+      }finally{await load();}
+    });
   }catch(e){$("#err").textContent="读取状态失败："+e.message;$("#err").style.display="block";}
 }
 load();setInterval(load,10000);

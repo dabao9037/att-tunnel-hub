@@ -10,7 +10,7 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.8.0"
+VERSION="1.8.1"
 # att-tunnel 网页面板（--web）和「添加节点可填 SSH 直装出口机」都还在 PR #2 分支上，
 # main 仍是 v2.0.0。先固定到含 SSH 直装和链接二维码 / 订阅的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/c4fcae1f3bb170dbd6759bc3bd9661276835713d/install.sh}"
@@ -304,10 +304,21 @@ EOF
   write_agent_unit
   systemctl daemon-reload
   systemctl enable att-hub-agent >/dev/null 2>&1 || true
-  systemctl restart att-hub-agent
-  sleep 3
-  systemctl is-active --quiet att-hub-agent \
-    || { journalctl -u att-hub-agent -n 20 --no-pager; die "agent 启动失败"; }
+  # 面板更新由 agent 自己调用；同步 restart 会连同安装脚本和回包线程一起杀死。
+  # 比较 systemd invocation，兼容已经部署、还不知道延迟重启选项的老 agent。
+  local agent_invocation
+  agent_invocation=$(systemctl show -p InvocationID --value att-hub-agent 2>/dev/null || true)
+  if [ -n "${INVOCATION_ID:-}" ] && [ "$INVOCATION_ID" = "$agent_invocation" ]; then
+    systemd-run --quiet --unit="att-hub-agent-restart-$(date +%s)-$$" \
+      --on-active=15s /bin/systemctl restart att-hub-agent \
+      || die "无法安排 agent 重启，更新未完成"
+    ok "agent 文件已更新，将在 15 秒后重启（先向面板回传结果）"
+  else
+    systemctl restart att-hub-agent
+    sleep 3
+    systemctl is-active --quiet att-hub-agent \
+      || { journalctl -u att-hub-agent -n 20 --no-pager; die "agent 启动失败"; }
+  fi
 
   echo
   ok "转发机安装完成，已回连面板 $hub"
