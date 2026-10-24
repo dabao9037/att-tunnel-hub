@@ -250,6 +250,10 @@ def handle(job):
         path = '/' + path
     body = job.get('body') or ''
     ctype = job.get('ctype') or ''
+    
+    # 特殊处理升级请求：直接重跑本机的安装脚本
+    if path == '/__upgrade__' and method == 'POST':
+        return handle_upgrade()
     with local.lock:
         if not local.cookie:
             local.login()
@@ -271,6 +275,27 @@ def handle(job):
             body = urllib.parse.urlencode(d)
         st, text, rct = local.req(method, path, body if method == 'POST' else None, ctype)
     return {'status': st, 'body': text, 'ctype': rct}
+
+
+def handle_upgrade():
+    """执行升级：从 HUB_URL 重新下载 install.sh 并运行。"""
+    import subprocess
+    try:
+        hub_url = HUB.rstrip('/')
+        script_url = 'https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh'
+        cmd = f'curl -fsSL {script_url} -o ./install.sh && chmod +x ./install.sh && '\
+              f'./install.sh -a "{hub_url}" -s "{TOKEN}"'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            msg = '升级完成'
+        else:
+            msg = result.stderr or '升级失败'
+        return {'status': 200 if result.returncode == 0 else 500,
+                'body': msg, 'ctype': 'text/plain; charset=utf-8'}
+    except subprocess.TimeoutExpired:
+        return {'status': 504, 'body': '升级超时', 'ctype': 'text/plain; charset=utf-8'}
+    except Exception as e:
+        return {'status': 500, 'body': f'升级失败：{e}', 'ctype': 'text/plain; charset=utf-8'}
 
 # ---------------------------------------------------------------- 主循环
 def heartbeat_fields():
