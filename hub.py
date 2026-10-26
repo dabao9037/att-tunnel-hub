@@ -31,6 +31,7 @@ SESSION_TTL = 12 * 3600
 POLL_WAIT = 25.0          # agent long-poll 挂起上限
 REQ_TIMEOUT = 360.0       # 普通代理请求上限；升级使用独立后台任务
 UPGRADE_TIMEOUT = 420.0   # 下载60s + 安装330s，仅后台等待
+UPGRADE_OK_TTL = 300      # 成功后「✓ 更新成功」保留 5 分钟；之后按钮恢复为「更新」
 OFFLINE_AFTER = 45        # 超过这么多秒没 poll 视为离线
 NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{20,64}$')     # att-tunnel 面板的订阅 token
@@ -314,7 +315,7 @@ def status_json():
             'added': rec.get('added') or 0,
             'agent': rec.get('agent') or {},
             'paneled': bool((rec.get('agent') or {}).get('web')),
-            'upgrade': dict(rec.get('upgrade') or {}),
+            'upgrade': visible_upgrade(rec.get('upgrade')),
         })
     return {
         'version': VERSION,
@@ -323,6 +324,21 @@ def status_json():
         'hub_url': HUB_URL,
         'forwarders': out,
     }
+
+
+def visible_upgrade(u):
+    """成功结果只展示一段时间，避免按钮永远停在「更新成功」。
+
+    失败/未确认保留到下一次更新，因为它们需要用户注意或重试；
+    只有 ok 在 UPGRADE_OK_TTL 后从面板状态里隐去（记录本身留在 state 里）。
+    """
+    if not u:
+        return {}
+    if u.get('state') == 'ok':
+        fin = u.get('finished') or u.get('started') or 0
+        if not fin or now() - fin > UPGRADE_OK_TTL:
+            return {}
+    return dict(u)
 
 # ---------------------------------------------------------------- 落地节点汇总
 def collect_nodes(timeout=40.0):
@@ -402,99 +418,184 @@ def status_line(rec):
         return '待安装'
     return '在线' if fwd_online(rec) else '离线'
 
-# ---------------------------------------------------------------- 页面（样式与 att-tunnel 面板同源）
+# ---------------------------------------------------------------- 页面（统一视觉：靛蓝渐变 + 卡片式布局）
 CSS = '''
-:root{--bg:#f3f5f9;--card:#fff;--fg:#0f172a;--mut:#64748b;--line:#e2e8f0;--pri:#2563eb;--pri2:#1d4ed8;
---ok:#16a34a;--okb:#dcfce7;--bad:#dc2626;--badb:#fee2e2;--warn:#b45309;--warnb:#fef3c7;--sh:0 1px 3px #0f172a14,0 4px 16px #0f172a0d}
-@media(prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#141b2d;--fg:#e2e8f0;--mut:#94a3b8;--line:#243049;
---pri:#3b82f6;--pri2:#60a5fa;--ok:#4ade80;--okb:#14532d66;--bad:#f87171;--badb:#7f1d1d66;--warn:#fbbf24;--warnb:#78350f66;--sh:0 1px 3px #0006}}
-*{box-sizing:border-box}html,body{margin:0}body{font:15px/1.5 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+:root{--bg:#f5f6fb;--card:#fff;--card2:#fafbff;--fg:#111827;--mut:#6b7280;--line:#e8eaf1;
+--pri:#4f46e5;--pri2:#4338ca;--pri-soft:#eef0ff;--grad:linear-gradient(135deg,#6366f1,#8b5cf6 55%,#06b6d4);
+--ok:#059669;--okb:#d1fae5;--bad:#dc2626;--badb:#fee2e2;--warn:#b45309;--warnb:#fef3c7;
+--sh:0 1px 2px #0f172a08,0 10px 30px -18px #0f172a2e;--shl:0 20px 50px -20px #4f46e560;--r:18px}
+@media(prefers-color-scheme:dark){:root{--bg:#0a0f1e;--card:#131a2b;--card2:#0f1626;--fg:#e5e9f2;--mut:#94a3b8;--line:#243149;
+--pri:#818cf8;--pri2:#a5b4fc;--pri-soft:#312e8155;--grad:linear-gradient(135deg,#4f46e5,#7c3aed 55%,#0891b2);
+--ok:#34d399;--okb:#065f4655;--bad:#f87171;--badb:#7f1d1d55;--warn:#fbbf24;--warnb:#78350f55;
+--sh:0 1px 2px #0004,0 10px 30px -18px #000a;--shl:0 20px 50px -20px #6366f155}}
+*{box-sizing:border-box}html,body{margin:0}
+body{font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:
+radial-gradient(900px 520px at 8% -12%,#c7d2fe66,transparent 62%),
+radial-gradient(760px 480px at 102% -6%,#bae6fd55,transparent 58%),
+radial-gradient(700px 420px at 48% 112%,#ddd6fe55,transparent 62%)}
+@media(prefers-color-scheme:dark){body::before{background:
+radial-gradient(900px 520px at 8% -12%,#312e8166,transparent 62%),
+radial-gradient(760px 480px at 102% -6%,#0e749055,transparent 58%),
+radial-gradient(700px 420px at 48% 112%,#4c1d9566,transparent 62%)}}
 button,input,select{font:inherit;color:inherit}
-.btn{border:1px solid var(--line);background:var(--card);padding:8px 14px;border-radius:10px;cursor:pointer;white-space:nowrap}
-.btn:hover{border-color:var(--pri)}.btn:focus-visible,input:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
-.btn.p{background:var(--pri);border-color:var(--pri);color:#fff}.btn.p:hover{background:var(--pri2)}
-.btn.d{color:var(--bad)}.btn.d:hover{border-color:var(--bad)}.btn.s{padding:5px 10px;font-size:13px}
-.btn:disabled{opacity:.55;cursor:not-allowed}
-input,select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
-label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--sh)}
-.mut{color:var(--mut)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;word-break:break-all}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line);
+background:var(--card);color:var(--fg);padding:8px 14px;border-radius:11px;cursor:pointer;white-space:nowrap;
+font-weight:500;text-decoration:none;transition:border-color .15s,box-shadow .15s,transform .15s,background .15s}
+.btn:hover{border-color:#c7cbe0;box-shadow:0 4px 12px -6px #0f172a33;transform:translateY(-1px)}
+@media(prefers-color-scheme:dark){.btn:hover{border-color:#3a4a6b}}
+.btn:active{transform:translateY(0)}
+.btn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+.btn.p{background:var(--grad);border-color:transparent;color:#fff;box-shadow:0 8px 20px -10px #4f46e5aa}
+.btn.p:hover{filter:brightness(1.06);box-shadow:0 12px 26px -10px #4f46e5bb}
+.btn.d{color:var(--bad)}.btn.d:hover{border-color:var(--bad);background:var(--badb)}
+.btn.s{padding:6px 11px;font-size:13px;border-radius:9px}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none;filter:none}
+input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--card2);
+transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus{border-color:var(--pri);box-shadow:0 0 0 4px var(--pri-soft);outline:none}
+label{display:block;font-size:13px;font-weight:600;color:var(--mut);margin:12px 0 5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}
+.mut{color:var(--mut)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;word-break:break-all}
 .err{color:var(--bad)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;
+font-weight:600;line-height:1.6;white-space:nowrap}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.pill.on{color:var(--ok);background:var(--okb)}
+.pill.on::before{animation:pulse 2.2s infinite}
+.pill.off{color:var(--bad);background:var(--badb)}
+.pill.w{color:var(--warn);background:var(--warnb)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #05966966}70%{box-shadow:0 0 0 5px #05966900}100%{box-shadow:0 0 0 0 #05966900}}
+@media(prefers-reduced-motion:reduce){.pill.on::before{animation:none}.btn,.fcard{transition:none}}
 '''
 
 PAGE_LOGIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>att-tunnel-hub 登录</title><style>{CSS}
-body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
-form{width:min(360px,100%);padding:28px}h1{font-size:20px;margin:0 0 4px}.logo{font-size:28px}
-.btn{width:100%;margin-top:16px;padding:11px}</style></head>
-<body><form class="card" method="post" action="{P}/login"><div class="logo" aria-hidden="true">🛰️</div>
-<h1>att-tunnel-hub</h1><p class="mut" style="margin:0 0 8px">转发机统一管理面板</p>{E}
+body{min-height:100vh;display:grid;place-items:center;padding:20px}
+.lg{width:min(400px,100%);padding:34px 30px 26px;position:relative;overflow:hidden}
+.lg::before{content:"";position:absolute;inset:0 0 auto;height:4px;background:var(--grad)}
+.mark{width:52px;height:52px;border-radius:16px;background:var(--grad);display:flex;align-items:center;
+justify-content:center;font-size:26px;box-shadow:var(--shl);margin-bottom:16px}
+.lg h1{font-size:22px;margin:0;letter-spacing:-.02em}
+.lg .sub{margin:4px 0 18px;font-size:13.5px}
+.lg .btn{width:100%;margin-top:20px;padding:11px}
+.foot{margin:18px 0 0;text-align:center;font-size:12px}
+</style></head>
+<body><form class="card lg" method="post" action="{P}/login"><div class="mark" aria-hidden="true">🛰️</div>
+<h1>att-tunnel-hub</h1><p class="sub mut">转发机统一管理面板</p>{E}
 <label for="pw">密码</label><input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>
-<button class="btn p" type="submit">登录</button></form></body></html>'''
+<button class="btn p" type="submit">登 录</button>
+<p class="foot mut">安全登录 · 仅限授权用户</p></form></body></html>'''
 PAGE_MAIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>att-tunnel-hub 面板</title><style>{CSS}
-.wrap{max-width:1180px;margin:0 auto;padding:16px}
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 20px;margin-bottom:16px}
-header h1{font-size:19px;margin:0}.hinfo{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
-.acts{display:flex;gap:8px;flex-wrap:wrap}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
-.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
-.pill.on{color:var(--ok);background:var(--okb)}.pill.off{color:var(--bad);background:var(--badb)}.pill.w{color:var(--warn);background:var(--warnb)}
-.sum{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
-.sum .card{padding:14px 16px}.sum b{display:block;font-size:24px;font-weight:700;margin-top:2px}
-.alert{padding:12px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);display:none;white-space:pre-wrap}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
-.node{padding:16px}.node h2{font-size:17px;margin:0;display:flex;align-items:center;justify-content:space-between;gap:8px}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:12px 0;font-size:14px}.kv dt{color:var(--mut)}.kv dd{margin:0;word-break:break-all}
-.nact{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-.sec{display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px}.sec h3{margin:0;font-size:16px}
-.empty{padding:30px;text-align:center}
-dialog{border:1px solid var(--line);border-radius:16px;background:var(--card);color:var(--fg);padding:0;width:min(600px,94vw);box-shadow:var(--sh)}
-dialog::backdrop{background:#0008}.dh{padding:16px 20px;border-bottom:1px solid var(--line);font-weight:700}
-.db{padding:4px 20px 16px}.df{padding:12px 20px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
-.copy{display:flex;gap:6px;align-items:flex-start;background:var(--bg);border-radius:10px;padding:8px 10px;margin-top:4px}.copy .mono{flex:1}
-#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9;max-width:min(380px,90vw)}
-.toast{padding:10px 14px;border-radius:12px;color:#fff;background:#0f172a;box-shadow:var(--sh);font-size:14px;animation:slideIn 0.3s ease}
-.toast.ok{background:#15803d}.toast.bad{background:#b91c1c}
-@keyframes slideIn{from{transform:translateX(400px);opacity:0}to{transform:translateX(0);opacity:1}}
-@media(max-width:760px){.sum{grid-template-columns:1fr}.wrap{padding:10px}header{padding:14px}}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 18px 44px}
+.topbar{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
+padding:16px 18px;margin-bottom:18px;position:relative;overflow:hidden}
+.topbar::after{content:"";position:absolute;inset:0 0 auto;height:3px;background:var(--grad);opacity:.95}
+.brand{display:flex;gap:13px;align-items:center;min-width:0}
+.mark{width:44px;height:44px;border-radius:14px;background:var(--grad);display:flex;align-items:center;
+justify-content:center;font-size:22px;box-shadow:var(--shl);flex:none}
+h1{font-size:19px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ver{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-soft);padding:2px 8px;
+border-radius:999px;letter-spacing:0}
+.sub{font-size:12.5px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;max-width:min(560px,70vw)}
+.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
+.stat{padding:16px 18px;display:flex;flex-direction:column;gap:2px;position:relative;overflow:hidden}
+.stat .ico{position:absolute;right:14px;top:11px;font-size:20px;opacity:.45}
+.stat .lab{font-size:12.5px;font-weight:600;color:var(--mut);letter-spacing:.02em}
+.stat b{font-size:28px;line-height:1.25;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat .hint{font-size:12px;color:var(--mut)}
+.alert{padding:13px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);
+display:none;white-space:pre-wrap;border-radius:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(345px,1fr));gap:16px}
+.fcard{padding:18px;display:flex;flex-direction:column;transition:box-shadow .2s,transform .2s,border-color .2s}
+.fcard:hover{box-shadow:0 18px 44px -24px #0f172a45;transform:translateY(-2px);border-color:#d7dbea}
+.fhead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.fname{display:flex;align-items:center;gap:9px;min-width:0}
+.avatar{width:34px;height:34px;border-radius:10px;background:var(--pri-soft);color:var(--pri);display:flex;
+align-items:center;justify-content:center;font-weight:700;font-size:15px;flex:none;text-transform:uppercase}
+.fhead h2{font-size:16.5px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fmeta{font-size:12.5px;color:var(--mut);margin:8px 0 0;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:11px 14px;margin:14px 0 0;padding:14px 0;
+border-top:1px dashed var(--line);border-bottom:1px dashed var(--line)}
+.metric{min-width:0}
+.metric span{display:block;font-size:11.5px;color:var(--mut);font-weight:600;letter-spacing:.02em}
+.metric b{display:block;font-size:14px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.metric.wide{grid-column:1/-1}
+.metric.wide b{white-space:normal;overflow:visible}
+.nact{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.nact .row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.nact .row .grow{flex:1}
+.mainbtn .btn{width:100%}
+.upmsg{width:100%;font-size:12px;margin-top:9px;color:var(--mut);line-height:1.55}
+.sec{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:24px 2px 12px}
+.sec h3{margin:0;font-size:16px;letter-spacing:-.01em}
+.empty{padding:46px 22px;text-align:center;line-height:1.9}
+.empty b{display:block;font-size:16px;margin-bottom:2px}
+dialog{border:1px solid var(--line);border-radius:20px;background:var(--card);color:var(--fg);padding:0;
+width:min(620px,94vw);box-shadow:0 30px 80px -20px #0006}
+dialog::backdrop{background:#0b102066;backdrop-filter:blur(4px)}
+.dh{padding:18px 22px;border-bottom:1px solid var(--line);font-weight:700;display:flex;align-items:center;gap:8px}
+.db{padding:6px 22px 18px}
+.df{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.copy{display:flex;gap:8px;align-items:flex-start;background:var(--card2);border:1px solid var(--line);
+border-radius:12px;padding:10px 12px;margin-top:6px}
+.copy .mono{flex:1;max-height:260px;overflow:auto}
+#toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:9px;z-index:20;
+max-width:min(400px,92vw)}
+.toast{padding:11px 15px;border-radius:12px;color:#fff;background:#111827;box-shadow:0 16px 40px -12px #0006;
+font-size:14px;animation:slideIn .28s ease}
+.toast.ok{background:linear-gradient(135deg,#059669,#10b981)}
+.toast.bad{background:linear-gradient(135deg,#b91c1c,#ef4444)}
+@keyframes slideIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+@media(max-width:760px){.wrap{padding:12px 10px 36px}.topbar{padding:14px}
+.acts{width:100%}.grid{grid-template-columns:1fr}.sub{max-width:80vw}}
+@media(max-width:560px){.stats{grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{padding:12px 10px}.stat b{font-size:22px}.stat .hint,.stat .ico{display:none}
+.stat .lab{font-size:11px}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:8px}.acts form{display:block}.acts form .btn{width:100%}}
 </style></head><body><div class="wrap">
-<header class="card"><div><h1>🛰️ att-tunnel-hub <span class="mut" style="font-size:13px;font-weight:400">v{V}</span></h1>
-<div class="hinfo mut" id="hinfo">加载中…</div></div>
+<header class="topbar card">
+<div class="brand"><div class="mark" aria-hidden="true">🛰️</div>
+<div style="min-width:0"><h1>att-tunnel-hub <span class="ver">v{V}</span></h1>
+<div class="sub mut" id="hinfo">加载中…</div></div></div>
 <div class="acts"><button class="btn p" id="bAdd" type="button">＋ 添加转发机</button>
 <a class="btn" href="{P}/nodes">🌐 落地节点汇总</a>
-<button class="btn" id="bRef" type="button">刷新</button>
+<button class="btn" id="bRef" type="button">↻ 刷新</button>
 <form method="post" action="{P}/logout" style="margin:0"><input type="hidden" name="csrf" value="{C}"><button class="btn" type="submit">退出</button></form></div></header>
 <div class="card alert" id="err" role="alert"></div>
-<div class="sum" id="sum"></div>
-<div class="sec"><h3>转发机</h3><span class="mut" style="font-size:13px" id="meta" aria-live="polite"></span></div>
+<div class="stats" id="sum"></div>
+<div class="sec"><h3>转发机</h3><span class="mut" style="font-size:12.5px" id="meta" aria-live="polite"></span></div>
 <div class="grid" id="list"></div></div>
 <div id="toasts" aria-live="polite"></div>
 '''
 PAGE_MAIN += '''
-<dialog id="dAdd" aria-labelledby="dAddH"><form id="fAdd" method="dialog"><div class="dh" id="dAddH">添加转发机</div><div class="db">
-<p class="mut" style="font-size:13px">填转发机的公网 IP，面板会生成该机专属的一键代码。把代码贴到那台机器跑完，它会自动回连本面板。</p>
+<dialog id="dAdd" aria-labelledby="dAddH"><form id="fAdd" method="dialog"><div class="dh" id="dAddH">＋ 添加转发机</div><div class="db">
+<p class="mut" style="font-size:13px;margin-top:14px">填转发机的公网 IP，面板会生成该机专属的一键代码。把代码贴到那台机器跑完，它会自动回连本面板。</p>
 <label for="aName">名称</label><input id="aName" name="name" required placeholder="如 fwd2" pattern="[A-Za-z0-9_-]{1,32}">
 <label for="aIp">公网 IP 或域名</label><input id="aIp" name="ip" required placeholder="如 1.2.3.4">
 <label for="aNote">备注（可空）</label><input id="aNote" name="note" placeholder="如 香港入口">
 </div><div class="df"><button class="btn" type="button" id="aCancel">取消</button>
 <button class="btn p" id="aOk" type="submit">生成一键代码</button></div></form></dialog>
 
-<dialog id="dCmd" aria-labelledby="dCmdH"><div class="dh" id="dCmdH">一键安装代码</div><div class="db">
-<p class="mut" style="font-size:13px">在这台转发机上用 root 跑下面这条命令，全程不会问任何问题。它会装好 att-tunnel 入口端和上报 agent，装完这里会变成「在线」。<br>代码里带着该机的专属密钥，请当密码保管。</p>
+<dialog id="dCmd" aria-labelledby="dCmdH"><div class="dh" id="dCmdH">⚡ 一键安装代码</div><div class="db">
+<p class="mut" style="font-size:13px;margin-top:14px">在这台转发机上用 root 跑下面这条命令，全程不会问任何问题。它会装好 att-tunnel 入口端和上报 agent，装完这里会变成「在线」。<br>代码里带着该机的专属密钥，请当密码保管。</p>
 <div class="copy"><code class="mono" id="cmdText"></code><button class="btn s" type="button" id="cmdCopy">复制</button></div>
 </div><div class="df"><button class="btn p" type="button" id="cmdClose">知道了</button></div></dialog>
 
 <dialog id="dDel" aria-labelledby="dDelH"><form id="fDel" method="dialog"><div class="dh" id="dDelH">删除转发机</div><div class="db">
-<p>仅从面板里移除记录，<b>不会</b>去动那台机器上的 att-tunnel。如要彻底卸载，在那台机上跑 <code class="mono">att-tunnel</code> 菜单里的卸载。</p>
+<p style="margin-top:14px">仅从面板里移除记录，<b>不会</b>去动那台机器上的 att-tunnel。如要彻底卸载，在那台机上跑 <code class="mono">att-tunnel</code> 菜单里的卸载。</p>
 <label for="dName">输入名称确认：<b id="dWho"></b></label><input id="dName" name="confirm" required autocomplete="off">
 </div><div class="df"><button class="btn" type="button" id="dCancel">取消</button>
 <button class="btn d" id="dOk" type="submit">确认删除</button></div></form></dialog>
 
 <dialog id="dEdit" aria-labelledby="dEditH"><form id="fEdit" method="dialog"><div class="dh" id="dEditH">编辑转发机</div><div class="db">
-<p class="mut" style="font-size:13px">密钥不变，所以改完<b>不用重装</b>，转发机上的 agent 和落地机都不受影响。<br>IP 只是面板里的备忘记录，改它不会去改那台机器的配置。</p>
+<p class="mut" style="font-size:13px;margin-top:14px">密钥不变，所以改完<b>不用重装</b>，转发机上的 agent 和落地机都不受影响。<br>IP 只是面板里的备忘记录，改它不会去改那台机器的配置。</p>
 <input type="hidden" id="eOld" name="name">
 <label for="eName">名称</label><input id="eName" name="new_name" required pattern="[A-Za-z0-9_-]{1,32}">
 <label for="eIp">公网 IP 或域名</label><input id="eIp" name="ip" required>
@@ -511,7 +612,7 @@ function upgradeButton(name){
   const u=UPGRADES.get(name);
   return '<button class="btn s" type="button" data-upgrade="'+esc(name)+'"'
     +(u&&u.state==='running'?' disabled':'')
-    +(u&&u.state==='ok'?' style="color:#15803d"':'')+'>'
+    +(u&&u.state==='ok'?' style="color:#059669"':'')+'>'
     +(u?(u.state==='running'?'更新中…':u.state==='ok'?'✓ 更新成功':u.state==='unknown'?'结果未确认':'更新失败，重试'):'更新')+'</button>';
 }
 const $=s=>document.querySelector(s);
@@ -535,27 +636,35 @@ function card(f){
   const cls=f.online?"on":(f.last_seen?"off":"w");
   const txt=f.online?"在线":(f.last_seen?"离线":"待安装");
   const a=f.agent||{};
+  const initial=esc(String(f.name||"?").slice(0,1));
   const manage=f.online&&f.paneled
     ? '<a class="btn p s" href="'+P+'/f/'+encodeURIComponent(f.name)+'/">管理落地机</a>'
     : '<button class="btn s" type="button" disabled title="转发机在线后可用">管理落地机</button>';
-  return '<div class="card node"><h2>'+esc(f.name)+'<span class="pill '+cls+'">'+txt+'</span></h2>'
-    +'<dl class="kv"><dt>IP</dt><dd class="mono">'+esc(f.ip)+'</dd>'
-    +(f.note?'<dt>备注</dt><dd>'+esc(f.note)+'</dd>':'')
-    +'<dt>落地机</dt><dd>'+(a.nodes!==undefined?esc(a.nodes)+' 个':'—')+'</dd>'
-    +'<dt>实时网速</dt><dd>'+(a.rate_rx!==undefined
-        ?'↓ '+fb(a.rate_rx)+'/s　↑ '+fb(a.rate_tx)+'/s'
-        :'<span class="mut">—</span>')+'</dd>'
-    +'<dt>累计流量</dt><dd>'+(a.rx!==undefined
-        ?'↓ '+fb(a.rx)+'　↑ '+fb(a.tx)+'<div class="mut" style="font-size:12px">网卡总量，重启后归零</div>'
-        :'<span class="mut">—</span>')+'</dd>'
-    +'<dt>最后上报</dt><dd>'+ago(f.last_seen)+'</dd>'
-    +(a.ver?'<dt>管理代理版本</dt><dd>'+esc(a.ver)+'</dd>':'')+'</dl>'
-    +'<div class="nact">'+manage
+  return '<article class="card fcard"><div class="fhead"><div class="fname">'
+    +'<span class="avatar" aria-hidden="true">'+initial+'</span><h2>'+esc(f.name)+'</h2></div>'
+    +'<span class="pill '+cls+'">'+txt+'</span></div>'
+    +'<div class="fmeta"><span class="mono">'+esc(f.ip)+'</span>'
+    +(f.note?'<span class="mut">·</span><span>'+esc(f.note)+'</span>':'')+'</div>'
+    +'<div class="metrics">'
+    +'<div class="metric"><span>落地机</span><b>'+(a.nodes!==undefined?esc(a.nodes)+' 个':'—')+'</b></div>'
+    +'<div class="metric"><span>最后上报</span><b>'+ago(f.last_seen)+'</b></div>'
+    +'<div class="metric wide"><span>实时速率</span><b>'+(a.rate_rx!==undefined
+        ?'↓ '+fb(a.rate_rx)+'/s ↑ '+fb(a.rate_tx)+'/s'
+        :'<span class="mut">—</span>')+'</b></div>'
+    +'<div class="metric wide"><span>累计流量</span><b>'+(a.rx!==undefined
+        ?'↓ '+fb(a.rx)+' ↑ '+fb(a.tx)
+        :'<span class="mut">—</span>')+'</b></div>'
+    +'</div><div class="nact"><div class="mainbtn">'+manage+'</div><div class="row">'
     +'<button class="btn s" type="button" data-edit="'+esc(f.name)+'">编辑</button>'
     +'<button class="btn s" type="button" data-cmd="'+esc(f.name)+'">一键代码</button>'
     +((f.online||UPGRADES.has(f.name))?upgradeButton(f.name):'')
-    +(f.upgrade&&f.upgrade.message?'<div class="mut" style="width:100%;font-size:12px">'+esc(f.upgrade.message)+'</div>':'')
-    +'<button class="btn d s" type="button" data-del="'+esc(f.name)+'">删除</button></div></div>';
+    +'<span class="grow"></span>'
+    +'<button class="btn d s" type="button" data-del="'+esc(f.name)+'">删除</button></div></div>'
+    +((a.ver||(f.upgrade&&f.upgrade.message))?'<div class="upmsg">'
+        +(a.ver?'管理代理 '+esc(a.ver):'')
+        +(a.ver&&f.upgrade&&f.upgrade.message?' · ':'')
+        +((f.upgrade&&f.upgrade.message)?esc(f.upgrade.message):'')+'</div>':'')
+    +'</article>';
 }
 async function load(){
   try{
@@ -574,12 +683,12 @@ async function load(){
     FWD=fs;
     const nodes=fs.reduce((s,f)=>s+(parseInt((f.agent||{}).nodes,10)||0),0);
     $("#sum").innerHTML=
-      '<div class="card"><span class="mut">转发机</span><b>'+fs.length+'</b></div>'
-     +'<div class="card"><span class="mut">在线</span><b>'+on+'</b></div>'
-     +'<div class="card"><span class="mut">落地机（节点）</span><b>'+nodes+'</b></div>';
+      '<div class="stat card"><span class="ico" aria-hidden="true">🛰️</span><span class="lab">转发机</span><b>'+fs.length+'</b><span class="hint">已登记</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">🟢</span><span class="lab">在线</span><b>'+on+'</b><span class="hint">'+fs.length+' 台中在线</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">🌐</span><span class="lab">落地机（节点）</span><b>'+nodes+'</b><span class="hint">全部转发机合计</span></div>';
     $("#hinfo").innerHTML='<span>面板地址 <span class="mono">'+esc(d.hub_url||"未配置")+'</span></span>';
     $("#list").innerHTML=fs.length?fs.map(card).join("")
-      :'<div class="card empty mut">还没有转发机。点「＋ 添加转发机」填 IP，把生成的一键代码跑在那台机器上。</div>';
+      :'<div class="card empty"><b>还没有转发机</b><span class="mut">点右上角「＋ 添加转发机」填 IP，把生成的一键代码跑在那台机器上。</span></div>';
     $("#meta").textContent="更新于 "+new Date().toLocaleTimeString();
     $("#err").style.display="none";
     $("#list").querySelectorAll("[data-cmd]").forEach(b=>b.onclick=async()=>{
@@ -636,41 +745,60 @@ $("#fEdit").onsubmit=async e=>{e.preventDefault();const b=$("#eOk");b.disabled=t
 PAGE_NODES = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>落地节点 · att-tunnel-hub</title><style>{CSS}
-.wrap{max-width:1180px;margin:0 auto;padding:16px}
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 20px;margin-bottom:16px}
-header h1{font-size:19px;margin:0}.hinfo{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
-.acts{display:flex;gap:8px;flex-wrap:wrap}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
-.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
-.pill.on{color:var(--ok);background:var(--okb)}.pill.off{color:var(--bad);background:var(--badb)}.pill.w{color:var(--warn);background:var(--warnb)}
-.sum{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
-.sum .card{padding:14px 16px}.sum b{display:block;font-size:24px;font-weight:700;margin-top:2px}
-.alert{padding:12px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);display:none;white-space:pre-wrap}
-.warnbox{padding:12px 16px;margin-bottom:16px;border-color:var(--warn);color:var(--warn);background:var(--warnb);display:none;white-space:pre-wrap;font-size:13px}
-.tblwrap{overflow-x:auto}
+.wrap{max-width:1320px;margin:0 auto;padding:20px 18px 44px}
+.topbar{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
+padding:16px 18px;margin-bottom:18px;position:relative;overflow:hidden}
+.topbar::after{content:"";position:absolute;inset:0 0 auto;height:3px;background:var(--grad);opacity:.95}
+.brand{display:flex;gap:13px;align-items:center;min-width:0}
+.mark{width:44px;height:44px;border-radius:14px;background:var(--grad);display:flex;align-items:center;
+justify-content:center;font-size:22px;box-shadow:var(--shl);flex:none}
+h1{font-size:19px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ver{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-soft);padding:2px 8px;
+border-radius:999px;letter-spacing:0}
+.sub{font-size:12.5px;margin-top:3px}
+.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.stat{padding:16px 18px;display:flex;flex-direction:column;gap:2px;position:relative;overflow:hidden}
+.stat .ico{position:absolute;right:14px;top:11px;font-size:20px;opacity:.45}
+.stat .lab{font-size:12.5px;font-weight:600;color:var(--mut);letter-spacing:.02em}
+.stat b{font-size:26px;line-height:1.25;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat .hint{font-size:12px;color:var(--mut)}
+.alert{padding:13px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);
+display:none;white-space:pre-wrap;border-radius:14px}
+.warnbox{padding:13px 16px;margin-bottom:16px;border-color:#fcd34d;color:var(--warn);background:var(--warnb);
+display:none;white-space:pre-wrap;font-size:13px;border-radius:14px}
+.tblwrap{overflow:auto;padding:2px 0}
 table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
-th{font-size:12px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--card);font-size:11.5px;color:var(--mut);font-weight:700;
+text-transform:uppercase;letter-spacing:.06em;z-index:1}
+tbody tr{transition:background .15s}tbody tr:hover{background:var(--card2)}
 tbody tr:last-child td{border-bottom:none}
-tbody tr:hover{background:var(--bg)}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
-.fwdcell{font-weight:600}
-.sec{display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px}.sec h3{margin:0;font-size:16px}
-.empty{padding:30px;text-align:center}
-#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9;max-width:min(380px,90vw)}
-.toast{padding:10px 14px;border-radius:12px;color:#fff;background:#0f172a;box-shadow:var(--sh);font-size:14px}
-.toast.ok{background:#15803d}.toast.bad{background:#b91c1c}
-@media(max-width:760px){.sum{grid-template-columns:repeat(2,1fr)}.wrap{padding:10px}header{padding:14px}}
+.fwdcell{font-weight:600}.fwdcell .mono{font-weight:400;margin-top:2px}
+.sec{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:24px 2px 12px}
+.sec h3{margin:0;font-size:16px;letter-spacing:-.01em}
+.empty{padding:46px 22px;text-align:center;line-height:1.9}
+#toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:9px;z-index:20;
+max-width:min(400px,92vw)}
+.toast{padding:11px 15px;border-radius:12px;color:#fff;background:#111827;box-shadow:0 16px 40px -12px #0006;
+font-size:14px}
+.toast.ok{background:linear-gradient(135deg,#059669,#10b981)}
+.toast.bad{background:linear-gradient(135deg,#b91c1c,#ef4444)}
+@media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.wrap{padding:12px 10px 36px}
+.topbar{padding:14px}.acts{width:100%}}
 </style></head><body><div class="wrap">
-<header class="card"><div><h1>🌐 落地节点汇总 <span class="mut" style="font-size:13px;font-weight:400">v{V}</span></h1>
-<div class="hinfo mut" id="hinfo">加载中…</div></div>
+<header class="topbar card">
+<div class="brand"><div class="mark" aria-hidden="true">🌐</div>
+<div style="min-width:0"><h1>落地节点汇总 <span class="ver">v{V}</span></h1>
+<div class="sub mut" id="hinfo">加载中…</div></div></div>
 <div class="acts"><a class="btn" href="{P}/">← 转发机</a>
-<button class="btn" id="bRef" type="button">刷新</button>
+<button class="btn" id="bRef" type="button">↻ 刷新</button>
 <form method="post" action="{P}/logout" style="margin:0"><input type="hidden" name="csrf" value="{C}"><button class="btn" type="submit">退出</button></form></div></header>
 <div class="card alert" id="err" role="alert"></div>
 <div class="card warnbox" id="warn"></div>
-<div class="sum" id="sum"></div>
-<div class="sec"><h3>所有落地节点</h3><span class="mut" style="font-size:13px" id="meta" aria-live="polite"></span></div>
+<div class="stats" id="sum"></div>
+<div class="sec"><h3>所有落地节点</h3><span class="mut" style="font-size:12.5px" id="meta" aria-live="polite"></span></div>
 <div class="card tblwrap" id="tbl"></div></div>
 <div id="toasts" aria-live="polite"></div>
 '''
@@ -687,7 +815,7 @@ function row(n){
   const cls=n.online?"on":"off", txt=n.online?"在线":"离线";
   const ip=n.ip?esc(n.ip):'<span class="mut">—</span>';
   const tip=n.probe_err?' title="'+esc(n.probe_err)+'"':'';
-  return '<tr><td class="fwdcell">'+esc(n.fwd)+'<div class="mut mono" style="font-weight:400">'+esc(n.fwd_ip)+'</div></td>'
+  return '<tr><td class="fwdcell">'+esc(n.fwd)+'<div class="mut mono">'+esc(n.fwd_ip)+'</div></td>'
     +'<td>'+esc(n.name)+'</td>'
     +'<td><span class="pill '+cls+'"'+tip+'>'+txt+'</span></td>'
     +'<td class="mono">'+ip+'</td>'
@@ -707,10 +835,10 @@ async function load(){
     const on=ns.filter(n=>n.online).length;
     const total=ns.reduce((s,n)=>s+(+n.total||0),0);
     $("#sum").innerHTML=
-      '<div class="card"><span class="mut">转发机</span><b>'+fs.length+'</b></div>'
-     +'<div class="card"><span class="mut">落地节点</span><b>'+ns.length+'</b></div>'
-     +'<div class="card"><span class="mut">节点在线</span><b>'+on+'</b></div>'
-     +'<div class="card"><span class="mut">累计流量</span><b>'+fb(total)+'</b></div>';
+      '<div class="stat card"><span class="ico" aria-hidden="true">🛰️</span><span class="lab">转发机</span><b>'+fs.length+'</b><span class="hint">已登记</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">🌐</span><span class="lab">落地节点</span><b>'+ns.length+'</b><span class="hint">全部节点</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">🟢</span><span class="lab">节点在线</span><b>'+on+'</b><span class="hint">'+ns.length+' 个中在线</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">📊</span><span class="lab">累计流量</span><b>'+fb(total)+'</b><span class="hint">全部节点合计</span></div>';
     const okf=fs.filter(f=>!f.error);
     $("#hinfo").innerHTML='<span>已取到 '+okf.length+'/'+fs.length+' 台转发机的节点</span>';
     const bad=fs.filter(f=>f.error);
@@ -724,7 +852,7 @@ async function load(){
       ?'<table><thead><tr><th>转发机</th><th>节点</th><th>状态</th><th>出口 IP</th>'
         +'<th>入口端口</th><th>伪装域名</th><th>累计流量</th><th>当前速率</th><th></th></tr></thead>'
         +'<tbody>'+ns.map(row).join("")+'</tbody></table>'
-      :'<div class="empty mut">还没有落地节点。进某台转发机的「管理落地机」添加节点。</div>';
+      :'<div class="empty"><b>还没有落地节点</b><span class="mut">进某台转发机的「管理落地机」添加节点。</span></div>';
     $("#meta").textContent="更新于 "+new Date().toLocaleTimeString();
     $("#err").style.display="none";
   }catch(e){
@@ -736,6 +864,7 @@ $("#bRef").onclick=()=>load();
 load();setInterval(load,30000);
 </script>
 '''
+
 
 # ---------------------------------------------------------------- HTTP
 class H(http.server.BaseHTTPRequestHandler):

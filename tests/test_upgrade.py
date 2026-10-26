@@ -118,7 +118,16 @@ with tempfile.TemporaryDirectory() as tmp:
         rec['upgrade'] = {'id': 'restart-test', 'state': 'running'}
         hub.recover_upgrades()
         assert rec['upgrade']['state'] == 'unknown'
-        print('PASS: HTTP 202 immediate; duplicate coalescing; authenticated agent success/failure/timeout; persisted status; restart recovery; output not leaked')
+        # 成功结果过期后从面板状态隐去，按钮恢复为「更新」；失败/未确认仍然保留。
+        rec['upgrade'] = {'id': 'ttl-test', 'state': 'ok', 'message': '更新成功',
+                          'finished': hub.now() - hub.UPGRADE_OK_TTL - 1}
+        assert json.load(client.open(base + '/api/status'))['forwarders'][0]['upgrade'] == {}
+        rec['upgrade'] = {'id': 'ttl-test', 'state': 'ok', 'message': '更新成功', 'finished': hub.now()}
+        assert json.load(client.open(base + '/api/status'))['forwarders'][0]['upgrade']['state'] == 'ok'
+        rec['upgrade'] = {'id': 'ttl-test', 'state': 'error', 'message': '更新失败',
+                          'finished': hub.now() - 86400}
+        assert json.load(client.open(base + '/api/status'))['forwarders'][0]['upgrade']['state'] == 'error'
+        print('PASS: HTTP 202 immediate; duplicate coalescing; authenticated agent success/failure/timeout; persisted status; restart recovery; output not leaked; success result expires')
     finally:
         server.shutdown()
         server.server_close()
