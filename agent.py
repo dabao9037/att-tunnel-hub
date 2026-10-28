@@ -26,6 +26,7 @@ POLL_TIMEOUT = 35
 BACKOFF_MAX = 60
 NET_SAMPLE = 5          # 网速采样间隔（秒）
 CSRF_RE = re.compile(r'name="csrf" value="([^"]+)"')
+LOGIN_TITLE = '<title>att-tunnel 登录</title>'
 # 虚拟网卡：统计本机对外网速时要排除，否则重复计数
 SKIP_IF = ('lo', 'docker', 'veth', 'br-', 'virbr', 'tun', 'tap', 'wg', 'sit', 'dummy')
 
@@ -167,6 +168,13 @@ net = NetMeter()
 # ---------------------------------------------------------------- 本机 att-tunnel 面板会话
 # agent 用 web.env 里的密码登录本机面板，自己持一份 cookie 和 CSRF，
 # 这样面板机那边不需要知道转发机面板的密码。
+def is_login_response(text, ctype):
+    """att-tunnel 未登录时返回 200 的登录页；只看状态码会把它当正常页面代理出去。"""
+    if 'html' not in (ctype or '').lower():
+        return False
+    return LOGIN_TITLE in text or ('name="password"' in text and '/login' in text)
+
+
 class Local:
     def __init__(self):
         self.cookie = ''
@@ -264,16 +272,22 @@ def handle(job):
         body = urllib.parse.urlencode(d)
         ctype = 'application/x-www-form-urlencoded'
     st, text, rct = local.req(method, path, body if method == 'POST' else None, ctype)
-    if st in (401, 403):
-        # 会话过期或 CSRF 对不上：重登一次再试
+    if st in (401, 403) or is_login_response(text, rct):
+        # 本机面板会话过期时，GET / 会返回 200 的登录页；必须由 agent 自己重登，
+        # 不能把登录页代理给面板用户，否则用户会莫名看到「输入密码」界面。
         with local.lock:
             local.cookie = ''
+            local.csrf = ''
             local.login()
         if method == 'POST':
             d = dict(urllib.parse.parse_qsl(body, keep_blank_values=True))
             d['csrf'] = local.csrf
             body = urllib.parse.urlencode(d)
         st, text, rct = local.req(method, path, body if method == 'POST' else None, ctype)
+        if st in (401, 403) or is_login_response(text, rct):
+            return {'status': 502,
+                    'body': '<p class="err">转发机本地面板会话失效，自动重新登录仍未成功；请检查该机的 att-tunnel 面板。</p>',
+                    'ctype': 'text/html; charset=utf-8'}
     return {'status': st, 'body': text, 'ctype': rct}
 
 
