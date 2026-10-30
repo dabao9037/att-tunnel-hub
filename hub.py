@@ -419,159 +419,252 @@ def status_line(rec):
     return '在线' if fwd_online(rec) else '离线'
 
 # ---------------------------------------------------------------- 页面（统一视觉：靛蓝渐变 + 卡片式布局）
-CSS = '''
-:root{--bg:#f5f6fb;--card:#fff;--card2:#fafbff;--fg:#111827;--mut:#6b7280;--line:#e8eaf1;
---pri:#4f46e5;--pri2:#4338ca;--pri-soft:#eef0ff;--grad:linear-gradient(135deg,#6366f1,#8b5cf6 55%,#06b6d4);
---ok:#059669;--okb:#d1fae5;--bad:#dc2626;--badb:#fee2e2;--warn:#b45309;--warnb:#fef3c7;
---sh:0 1px 2px #0f172a08,0 10px 30px -18px #0f172a2e;--shl:0 20px 50px -20px #4f46e560;--r:18px}
-@media(prefers-color-scheme:dark){:root{--bg:#0a0f1e;--card:#131a2b;--card2:#0f1626;--fg:#e5e9f2;--mut:#94a3b8;--line:#243149;
---pri:#818cf8;--pri2:#a5b4fc;--pri-soft:#312e8155;--grad:linear-gradient(135deg,#4f46e5,#7c3aed 55%,#0891b2);
---ok:#34d399;--okb:#065f4655;--bad:#f87171;--badb:#7f1d1d55;--warn:#fbbf24;--warnb:#78350f55;
---sh:0 1px 2px #0004,0 10px 30px -18px #000a;--shl:0 20px 50px -20px #6366f155}}
-*{box-sizing:border-box}html,body{margin:0}
-body{font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+CSS = ''':root{
+  --bg:#f3f4f6;--card:#fff;--card2:#f9fafb;--fg:#111827;--mut:#6b7280;--line:#e5e7eb;
+  --pri:#2563eb;--pri2:#1d4ed8;--pri-soft:#eff6ff;--pri-line:#bfdbfe;
+  --ok:#059669;--okb:#ecfdf5;--bad:#dc2626;--badb:#fef2f2;--warn:#b45309;--warnb:#fffbeb;
+  --grad:linear-gradient(135deg,#2563eb,#4f46e5 55%,#7c3aed);
+  --sh:0 1px 2px rgba(15,23,42,.04),0 4px 14px -10px rgba(15,23,42,.16);
+  --sh2:0 16px 36px -18px rgba(15,23,42,.28);
+  --r:16px;--sidebar:260px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#0b1120;--card:#111827;--card2:#0f172a;--fg:#f3f4f6;--mut:#9ca3af;--line:#1f2937;
+  --pri:#60a5fa;--pri2:#93c5fd;--pri-soft:#1e3a8a33;--pri-line:#1e40af;
+  --ok:#34d399;--okb:#064e3b55;--bad:#f87171;--badb:#7f1d1d55;--warn:#fbbf24;--warnb:#78350f55;
+  --sh:0 1px 2px #0006,0 10px 28px -16px #000a;--sh2:0 20px 44px -20px #000c;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{font:14px/1.6 ui-sans-serif,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
 background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased}
 body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:
-radial-gradient(900px 520px at 8% -12%,#c7d2fe66,transparent 62%),
-radial-gradient(760px 480px at 102% -6%,#bae6fd55,transparent 58%),
-radial-gradient(700px 420px at 48% 112%,#ddd6fe55,transparent 62%)}
+radial-gradient(900px 520px at 18% -12%,rgba(37,99,235,.08),transparent 62%),
+radial-gradient(760px 460px at 102% -8%,rgba(124,58,237,.07),transparent 58%)}
 @media(prefers-color-scheme:dark){body::before{background:
-radial-gradient(900px 520px at 8% -12%,#312e8166,transparent 62%),
-radial-gradient(760px 480px at 102% -6%,#0e749055,transparent 58%),
-radial-gradient(700px 420px at 48% 112%,#4c1d9566,transparent 62%)}}
-button,input,select{font:inherit;color:inherit}
+radial-gradient(900px 520px at 18% -12%,rgba(37,99,235,.12),transparent 62%),
+radial-gradient(760px 460px at 102% -8%,rgba(124,58,237,.10),transparent 58%)}}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:inherit}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line);
-background:var(--card);color:var(--fg);padding:8px 14px;border-radius:11px;cursor:pointer;white-space:nowrap;
-font-weight:500;text-decoration:none;transition:border-color .15s,box-shadow .15s,transform .15s,background .15s}
-.btn:hover{border-color:#c7cbe0;box-shadow:0 4px 12px -6px #0f172a33;transform:translateY(-1px)}
-@media(prefers-color-scheme:dark){.btn:hover{border-color:#3a4a6b}}
-.btn:active{transform:translateY(0)}
-.btn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
-.btn.p{background:var(--grad);border-color:transparent;color:#fff;box-shadow:0 8px 20px -10px #4f46e5aa}
-.btn.p:hover{filter:brightness(1.06);box-shadow:0 12px 26px -10px #4f46e5bb}
-.btn.d{color:var(--bad)}.btn.d:hover{border-color:var(--bad);background:var(--badb)}
-.btn.s{padding:6px 11px;font-size:13px;border-radius:9px}
+background:var(--card);color:var(--fg);padding:9px 14px;border-radius:10px;cursor:pointer;white-space:nowrap;
+font-weight:500;text-decoration:none;line-height:1.2;transition:background .15s,border-color .15s,box-shadow .15s,transform .15s}
+.btn:hover{background:var(--card2);border-color:#d1d5db;box-shadow:0 4px 12px -8px rgba(15,23,42,.25)}
+@media(prefers-color-scheme:dark){.btn:hover{border-color:#374151}}
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+.btn.p{background:var(--pri);border-color:var(--pri);color:#fff;box-shadow:0 6px 16px -8px rgba(37,99,235,.65)}
+.btn.p:hover{background:var(--pri2);border-color:var(--pri2);filter:none}
+.btn.d{color:var(--bad)}
+.btn.d:hover{border-color:var(--bad);background:var(--badb)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.ghost:hover{background:var(--card2);color:var(--fg);box-shadow:none}
+.btn.s{padding:6px 10px;font-size:12.5px;border-radius:8px}
 .btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none;filter:none}
-input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--card2);
+input,select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card2);
 transition:border-color .15s,box-shadow .15s}
-input:focus,select:focus{border-color:var(--pri);box-shadow:0 0 0 4px var(--pri-soft);outline:none}
-label{display:block;font-size:13px;font-weight:600;color:var(--mut);margin:12px 0 5px}
+input:focus,select:focus,textarea:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-soft);outline:none}
+label{display:block;font-size:12.5px;font-weight:600;color:var(--mut);margin:12px 0 5px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}
-.mut{color:var(--mut)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;word-break:break-all}
+.mut{color:var(--mut)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
 .err{color:var(--bad)}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;
-font-weight:600;line-height:1.6;white-space:nowrap}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11.5px;
+font-weight:600;line-height:1.7;white-space:nowrap;border:1px solid transparent}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
-.pill.on{color:var(--ok);background:var(--okb)}
+.pill.on{color:var(--ok);background:var(--okb);border-color:color-mix(in srgb,var(--ok) 22%,transparent)}
 .pill.on::before{animation:pulse 2.2s infinite}
 .pill.off{color:var(--bad);background:var(--badb)}
 .pill.w{color:var(--warn);background:var(--warnb)}
-@keyframes pulse{0%{box-shadow:0 0 0 0 #05966966}70%{box-shadow:0 0 0 5px #05966900}100%{box-shadow:0 0 0 0 #05966900}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(5,150,105,.4)}70%{box-shadow:0 0 0 5px rgba(5,150,105,0)}100%{box-shadow:0 0 0 0 rgba(5,150,105,0)}}
 @media(prefers-reduced-motion:reduce){.pill.on::before{animation:none}.btn,.fcard{transition:none}}
-'''
-
-PAGE_LOGIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
-<title>att-tunnel-hub 登录</title><style>{CSS}
-body{min-height:100vh;display:grid;place-items:center;padding:20px}
-.lg{width:min(400px,100%);padding:34px 30px 26px;position:relative;overflow:hidden}
-.lg::before{content:"";position:absolute;inset:0 0 auto;height:4px;background:var(--grad)}
-.mark{width:52px;height:52px;border-radius:16px;background:var(--grad);display:flex;align-items:center;
-justify-content:center;font-size:26px;box-shadow:var(--shl);margin-bottom:16px}
-.lg h1{font-size:22px;margin:0;letter-spacing:-.02em}
-.lg .sub{margin:4px 0 18px;font-size:13.5px}
-.lg .btn{width:100%;margin-top:20px;padding:11px}
-.foot{margin:18px 0 0;text-align:center;font-size:12px}
-</style></head>
-<body><form class="card lg" method="post" action="{P}/login"><div class="mark" aria-hidden="true">🛰️</div>
-<h1>att-tunnel-hub</h1><p class="sub mut">转发机统一管理面板</p>{E}
-<label for="pw">密码</label><input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>
-<button class="btn p" type="submit">登 录</button>
-<p class="foot mut">安全登录 · 仅限授权用户</p></form></body></html>'''
-PAGE_MAIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
-<title>att-tunnel-hub 面板</title><style>{CSS}
-.wrap{max-width:1200px;margin:0 auto;padding:20px 18px 44px}
-.topbar{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
-padding:16px 18px;margin-bottom:18px;position:relative;overflow:hidden}
-.topbar::after{content:"";position:absolute;inset:0 0 auto;height:3px;background:var(--grad);opacity:.95}
-.brand{display:flex;gap:13px;align-items:center;min-width:0}
-.mark{width:44px;height:44px;border-radius:14px;background:var(--grad);display:flex;align-items:center;
-justify-content:center;font-size:22px;box-shadow:var(--shl);flex:none}
-h1{font-size:19px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.app{display:flex;min-height:100vh}
+.sidebar{width:var(--sidebar);flex:none;background:var(--card);border-right:1px solid var(--line);
+padding:20px 14px 16px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:11px;padding:2px 8px;text-decoration:none;color:var(--fg)}
+.mark{width:42px;height:42px;border-radius:13px;background:var(--grad);display:grid;place-items:center;
+font-size:20px;box-shadow:0 8px 18px -10px rgba(37,99,235,.6);flex:none}
+.brand-txt{min-width:0}
+.brand-txt b{display:block;font-size:15px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-txt span{display:block;font-size:11.5px;color:var(--mut);margin-top:1px}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:var(--mut);
+text-decoration:none;font-size:14px;font-weight:500;transition:background .15s,color .15s}
+.nav-item svg{width:18px;height:18px;flex:none}
+.nav-item:hover{background:var(--card2);color:var(--fg)}
+.nav-item.active{background:var(--pri-soft);color:var(--pri);font-weight:600}
+.nav-count{margin-left:auto;font-size:11px;background:var(--card2);color:var(--mut);padding:1px 7px;
+border-radius:999px;border:1px solid var(--line);font-variant-numeric:tabular-nums}
+.nav-item.active .nav-count{background:var(--card);color:var(--pri);border-color:var(--pri-line)}
+.side-note{margin-top:auto;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px 13px}
+.side-note-title{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--okb);flex:none}
+.side-note p{margin:6px 0 0;font-size:11.5px;color:var(--mut);line-height:1.55}
+.side-foot{display:flex;flex-direction:column;gap:8px}
+.side-foot .btn{width:100%}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:14px;
+padding:12px 28px;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:blur(10px);
+border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+.page-head{min-width:0}
+.page-head h1{font-size:21px;margin:0;letter-spacing:-.02em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .ver{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-soft);padding:2px 8px;
-border-radius:999px;letter-spacing:0}
-.sub{font-size:12.5px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;max-width:min(560px,70vw)}
-.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
-.stat{padding:16px 18px;display:flex;flex-direction:column;gap:2px;position:relative;overflow:hidden}
-.stat .ico{position:absolute;right:14px;top:11px;font-size:20px;opacity:.45}
-.stat .lab{font-size:12.5px;font-weight:600;color:var(--mut);letter-spacing:.02em}
-.stat b{font-size:28px;line-height:1.25;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.stat .hint{font-size:12px;color:var(--mut)}
-.alert{padding:13px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);
-display:none;white-space:pre-wrap;border-radius:14px}
+border-radius:999px;letter-spacing:0;border:1px solid var(--pri-line)}
+.page-head .sub{margin:3px 0 0;font-size:12.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;max-width:min(620px,60vw)}
+.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:none}
+.content{width:100%;max-width:1280px;margin:0 auto;padding:24px 28px 48px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+.stat{padding:16px 17px;display:grid;grid-template-columns:auto 1fr;gap:0 12px;align-items:center;position:relative;overflow:hidden}
+.stat .ico{grid-row:1/4;width:42px;height:42px;border-radius:12px;background:var(--pri-soft);color:var(--pri);
+display:grid;place-items:center;font-size:19px;flex:none}
+.stat .ico svg{width:21px;height:21px}
+.stat:nth-child(2) .ico{background:var(--okb)}
+.stat:nth-child(3) .ico{background:#eef2ff}
+@media(prefers-color-scheme:dark){.stat:nth-child(3) .ico{background:#312e8133}}
+.stat:nth-child(4) .ico{background:#f5f3ff}
+@media(prefers-color-scheme:dark){.stat:nth-child(4) .ico{background:#4c1d9533}}
+.stat .lab{font-size:12.5px;font-weight:500;color:var(--mut);letter-spacing:.01em}
+.stat b{font-size:25px;line-height:1.3;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stat .hint{font-size:11.5px;color:var(--mut);line-height:1.45}
+.alert{padding:12px 15px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);
+display:none;white-space:pre-wrap;border-radius:12px}
+.warnbox{padding:12px 15px;margin-bottom:16px;border-color:#fcd34d;color:var(--warn);background:var(--warnb);
+display:none;white-space:pre-wrap;font-size:13px;border-radius:12px}
+.sec{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin:0 0 14px}
+.sec h3{font-size:16px;margin:0;letter-spacing:-.01em}
+.sec-sub{margin:4px 0 0;font-size:12.5px;color:var(--mut)}
+#meta{font-size:12px;color:var(--mut);white-space:nowrap}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(345px,1fr));gap:16px}
 .fcard{padding:18px;display:flex;flex-direction:column;transition:box-shadow .2s,transform .2s,border-color .2s}
-.fcard:hover{box-shadow:0 18px 44px -24px #0f172a45;transform:translateY(-2px);border-color:#d7dbea}
+.fcard:hover{box-shadow:var(--sh2);transform:translateY(-2px);border-color:var(--pri-line)}
 .fhead{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.fname{display:flex;align-items:center;gap:9px;min-width:0}
-.avatar{width:34px;height:34px;border-radius:10px;background:var(--pri-soft);color:var(--pri);display:flex;
-align-items:center;justify-content:center;font-weight:700;font-size:15px;flex:none;text-transform:uppercase}
-.fhead h2{font-size:16.5px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fmeta{font-size:12.5px;color:var(--mut);margin:8px 0 0;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
-.metrics{display:grid;grid-template-columns:1fr 1fr;gap:11px 14px;margin:14px 0 0;padding:14px 0;
-border-top:1px dashed var(--line);border-bottom:1px dashed var(--line)}
+.fname{display:flex;align-items:center;gap:10px;min-width:0}
+.avatar{width:38px;height:38px;border-radius:12px;background:var(--pri-soft);color:var(--pri);display:grid;
+place-items:center;font-weight:700;font-size:15px;flex:none;text-transform:uppercase;border:1px solid var(--pri-line)}
+.fhead h2{font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.01em}
+.fmeta{font-size:12.5px;color:var(--mut);margin:9px 0 0;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px 14px;margin:15px 0 0;padding:14px 0 0;
+border-top:1px solid var(--line)}
 .metric{min-width:0}
-.metric span{display:block;font-size:11.5px;color:var(--mut);font-weight:600;letter-spacing:.02em}
+.metric span{display:block;font-size:11.5px;color:var(--mut);font-weight:500;letter-spacing:.01em}
 .metric b{display:block;font-size:14px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums;
 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .metric.wide{grid-column:1/-1}
 .metric.wide b{white-space:normal;overflow:visible}
-.nact{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.nact{display:flex;flex-direction:column;gap:9px;margin-top:15px;padding-top:14px;border-top:1px solid var(--line)}
 .nact .row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
 .nact .row .grow{flex:1}
 .mainbtn .btn{width:100%}
 .upmsg{width:100%;font-size:12px;margin-top:9px;color:var(--mut);line-height:1.55}
-.sec{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:24px 2px 12px}
-.sec h3{margin:0;font-size:16px;letter-spacing:-.01em}
-.empty{padding:46px 22px;text-align:center;line-height:1.9}
+.empty{padding:52px 22px;text-align:center;line-height:1.9;border-style:dashed;background:var(--card2)}
 .empty b{display:block;font-size:16px;margin-bottom:2px}
-dialog{border:1px solid var(--line);border-radius:20px;background:var(--card);color:var(--fg);padding:0;
-width:min(620px,94vw);box-shadow:0 30px 80px -20px #0006}
-dialog::backdrop{background:#0b102066;backdrop-filter:blur(4px)}
+.tblwrap{overflow:auto;padding:0}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--card2);font-size:11px;color:var(--mut);font-weight:700;
+text-transform:uppercase;letter-spacing:.05em;z-index:1}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:var(--card2)}
+tbody tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.fwdcell{font-weight:600}
+.fwdcell .mono{font-weight:400;margin-top:2px;color:var(--mut)}
+dialog{border:1px solid var(--line);border-radius:18px;background:var(--card);color:var(--fg);padding:0;
+width:min(620px,94vw);box-shadow:0 30px 80px -20px rgba(0,0,0,.45)}
+dialog::backdrop{background:rgba(15,23,42,.5);backdrop-filter:blur(4px)}
 .dh{padding:18px 22px;border-bottom:1px solid var(--line);font-weight:700;display:flex;align-items:center;gap:8px}
 .db{padding:6px 22px 18px}
 .df{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .copy{display:flex;gap:8px;align-items:flex-start;background:var(--card2);border:1px solid var(--line);
-border-radius:12px;padding:10px 12px;margin-top:6px}
+border-radius:10px;padding:10px 12px;margin-top:6px}
 .copy .mono{flex:1;max-height:260px;overflow:auto}
 #toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:9px;z-index:20;
 max-width:min(400px,92vw)}
-.toast{padding:11px 15px;border-radius:12px;color:#fff;background:#111827;box-shadow:0 16px 40px -12px #0006;
-font-size:14px;animation:slideIn .28s ease}
+.toast{padding:11px 15px;border-radius:10px;color:#fff;background:#111827;box-shadow:0 16px 40px -12px rgba(0,0,0,.4);
+font-size:13.5px;animation:slideIn .25s ease}
 .toast.ok{background:linear-gradient(135deg,#059669,#10b981)}
 .toast.bad{background:linear-gradient(135deg,#b91c1c,#ef4444)}
-@keyframes slideIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
-@media(max-width:760px){.wrap{padding:12px 10px 36px}.topbar{padding:14px}
-.acts{width:100%}.grid{grid-template-columns:1fr}.sub{max-width:80vw}}
-@media(max-width:560px){.stats{grid-template-columns:repeat(3,1fr);gap:8px}
-.stat{padding:12px 10px}.stat b{font-size:22px}.stat .hint,.stat .ico{display:none}
-.stat .lab{font-size:11px}
-.acts{display:grid;grid-template-columns:1fr 1fr;gap:8px}.acts form{display:block}.acts form .btn{width:100%}}
-</style></head><body><div class="wrap">
-<header class="topbar card">
-<div class="brand"><div class="mark" aria-hidden="true">🛰️</div>
-<div style="min-width:0"><h1>att-tunnel-hub <span class="ver">v{V}</span></h1>
-<div class="sub mut" id="hinfo">加载中…</div></div></div>
-<div class="acts"><button class="btn p" id="bAdd" type="button">＋ 添加转发机</button>
-<a class="btn" href="{P}/nodes">🌐 落地节点汇总</a>
-<button class="btn" id="bRef" type="button">↻ 刷新</button>
-<form method="post" action="{P}/logout" style="margin:0"><input type="hidden" name="csrf" value="{C}"><button class="btn" type="submit">退出</button></form></div></header>
+@keyframes slideIn{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+.login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+.lg{width:min(420px,100%);padding:36px 32px 26px;position:relative;overflow:hidden}
+.lg::before{content:"";position:absolute;inset:0 0 auto;height:4px;background:var(--grad)}
+.lg .mark{width:52px;height:52px;border-radius:16px;font-size:25px;margin-bottom:18px}
+.lg h1{font-size:22px;margin:0;letter-spacing:-.02em}
+.lg .sub{margin:5px 0 20px;font-size:13px;color:var(--mut)}
+.lg .btn{width:100%;margin-top:20px;padding:11px}
+.foot{margin:18px 0 0;text-align:center;font-size:11.5px;color:var(--mut)}
+@media(max-width:900px){
+ .app{display:block}
+ .sidebar{position:static;width:auto;height:auto;flex-direction:row;align-items:center;gap:10px;
+ padding:10px 14px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto}
+ .brand{padding:0;flex:none}
+ .brand-txt b{font-size:14px}
+ .nav{flex-direction:row;margin-left:auto;gap:2px}
+ .nav-item{padding:8px 10px;font-size:13px;white-space:nowrap}
+ .nav-item svg{width:16px;height:16px}
+ .nav-count{display:none}
+ .side-note{display:none}
+ .side-foot{margin-left:4px;flex:none}
+ .side-foot .btn{width:auto;padding:7px 9px;font-size:12px}
+ .topbar{position:static;min-height:0;padding:14px;flex-wrap:wrap}
+ .page-head .sub{max-width:100%}
+ .acts{width:100%;display:flex;gap:8px}
+ .acts .btn{flex:1;width:auto}
+ .content{padding:16px 14px 36px}
+ .stats{grid-template-columns:repeat(2,1fr);gap:10px}
+ .stat{padding:13px;gap:0 10px}
+ .stat .ico{width:36px;height:36px;font-size:17px}
+ .stat b{font-size:21px}
+ .stat .hint{display:none}
+ .grid{grid-template-columns:1fr}
+}
+@media(max-width:560px){
+ .brand-txt{display:none}
+ .sec{align-items:flex-start;flex-direction:column;gap:4px}
+ #meta{white-space:normal}
+ .stats{gap:8px}
+ .stat{padding:12px 10px}
+ .stat b{font-size:19px}
+}
+'''
+
+PAGE_LOGIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>登录 · att-tunnel-hub</title><style>{CSS}</style></head>
+<body><div class="login-wrap"><form class="card lg" method="post" action="{P}/login"><div class="mark" aria-hidden="true">🛰️</div>
+<h1>att-tunnel-hub</h1><p class="sub">转发机统一管理面板</p>{E}
+<label for="pw">密码</label><input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>
+<button class="btn p" type="submit">登 录</button>
+<p class="foot">安全登录 · 仅限授权用户</p></form></div></body></html>
+'''
+PAGE_MAIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>转发机 · att-tunnel-hub</title><style>{CSS}</style></head>
+<body><div class="app">
+<aside class="sidebar">
+<a class="brand" href="{P}/"><div class="mark" aria-hidden="true">🛰️</div>
+<div class="brand-txt"><b>att-tunnel-hub</b><span>v{V}</span></div></a>
+<nav class="nav" aria-label="主导航">
+<a class="nav-item active" href="{P}/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg><span>转发机</span><span class="nav-count" id="navFwd">—</span></a>
+<a class="nav-item" href="{P}/nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg><span>落地节点</span><span class="nav-count" id="navNodes">—</span></a>
+</nav>
+<div class="side-note"><div class="side-note-title"><span class="dot"></span>面板运行中</div>
+<p>统一管理转发机与落地节点，业务流量不经过面板机。</p></div>
+<div class="side-foot"><form method="post" action="{P}/logout"><input type="hidden" name="csrf" value="{C}"><button class="btn ghost" type="submit">退出登录</button></form></div>
+</aside>
+<div class="main">
+<header class="topbar"><div class="page-head"><h1>转发机</h1>
+<p class="sub" id="hinfo">加载中…</p></div>
+<div class="acts"><button class="btn" id="bRef" type="button">↻ 刷新</button>
+<button class="btn p" id="bAdd" type="button">＋ 添加转发机</button></div></header>
+<main class="content">
 <div class="card alert" id="err" role="alert"></div>
 <div class="stats" id="sum"></div>
-<div class="sec"><h3>转发机</h3><span class="mut" style="font-size:12.5px" id="meta" aria-live="polite"></span></div>
-<div class="grid" id="list"></div></div>
+<div class="sec"><div><h3>全部转发机</h3><p class="sec-sub">查看实时速率、落地节点数量与更新状态</p></div>
+<span id="meta" aria-live="polite"></span></div>
+<div class="grid" id="list"></div>
+</main></div></div>
 <div id="toasts" aria-live="polite"></div>
 '''
 PAGE_MAIN += '''
@@ -624,6 +717,11 @@ function ago(t){if(!t)return "从未";const s=Math.max(0,Math.floor(Date.now()/1
   if(s<86400)return Math.floor(s/3600)+" 小时前";return Math.floor(s/86400)+" 天前";}
 function fb(n){n=+n||0;const u=["B","KB","MB","GB","TB","PB"];let i=0;
   while(n>=1024&&i<5){n/=1024;i++}return(i?n.toFixed(n<10?2:n<100?1:0):n)+" "+u[i];}
+const SI={
+fwd:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>',
+on:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+globe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg>',
+chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-3"/></svg>'};
 async function api(path,data){
   const r=await fetch(P+path,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":C},
     body:new URLSearchParams(Object.assign({csrf:C},data||{}))});
@@ -682,14 +780,19 @@ async function load(){
     });
     FWD=fs;
     const nodes=fs.reduce((s,f)=>s+(parseInt((f.agent||{}).nodes,10)||0),0);
+    const traffic=fs.reduce((s,f)=>s+(+((f.agent||{}).rx||0))+(+((f.agent||{}).tx||0)),0);
+    const onlinePct=fs.length?Math.round(on/fs.length*100):0;
+    $("#navFwd").textContent=fs.length;
+    $("#navNodes").textContent=nodes;
     $("#sum").innerHTML=
-      '<div class="stat card"><span class="ico" aria-hidden="true">🛰️</span><span class="lab">转发机</span><b>'+fs.length+'</b><span class="hint">已登记</span></div>'
-     +'<div class="stat card"><span class="ico" aria-hidden="true">🟢</span><span class="lab">在线</span><b>'+on+'</b><span class="hint">'+fs.length+' 台中在线</span></div>'
-     +'<div class="stat card"><span class="ico" aria-hidden="true">🌐</span><span class="lab">落地机（节点）</span><b>'+nodes+'</b><span class="hint">全部转发机合计</span></div>';
+      '<div class="stat card"><span class="ico" aria-hidden="true">'+SI.fwd+'</span><span class="lab">转发机</span><b>'+fs.length+'</b><span class="hint">已登记</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">'+SI.on+'</span><span class="lab">在线</span><b>'+on+'</b><span class="hint">在线率 '+onlinePct+'%</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">'+SI.globe+'</span><span class="lab">落地机（节点）</span><b>'+nodes+'</b><span class="hint">全部转发机合计</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">'+SI.chart+'</span><span class="lab">累计流量</span><b>'+fb(traffic)+'</b><span class="hint">↓ 入站 + ↑ 出站</span></div>';
     $("#hinfo").innerHTML='<span>面板地址 <span class="mono">'+esc(d.hub_url||"未配置")+'</span></span>';
     $("#list").innerHTML=fs.length?fs.map(card).join("")
       :'<div class="card empty"><b>还没有转发机</b><span class="mut">点右上角「＋ 添加转发机」填 IP，把生成的一键代码跑在那台机器上。</span></div>';
-    $("#meta").textContent="更新于 "+new Date().toLocaleTimeString();
+    $("#meta").textContent="更新于 "+new Date().toLocaleTimeString('zh-CN',{hour12:false});
     $("#err").style.display="none";
     $("#list").querySelectorAll("[data-cmd]").forEach(b=>b.onclick=async()=>{
       try{const j=await api("/api/cmd",{name:b.dataset.cmd});showCmd(j.cmd);}catch(e){toast(e.message,"bad");}});
@@ -744,62 +847,31 @@ $("#fEdit").onsubmit=async e=>{e.preventDefault();const b=$("#eOk");b.disabled=t
 
 PAGE_NODES = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
-<title>落地节点 · att-tunnel-hub</title><style>{CSS}
-.wrap{max-width:1320px;margin:0 auto;padding:20px 18px 44px}
-.topbar{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
-padding:16px 18px;margin-bottom:18px;position:relative;overflow:hidden}
-.topbar::after{content:"";position:absolute;inset:0 0 auto;height:3px;background:var(--grad);opacity:.95}
-.brand{display:flex;gap:13px;align-items:center;min-width:0}
-.mark{width:44px;height:44px;border-radius:14px;background:var(--grad);display:flex;align-items:center;
-justify-content:center;font-size:22px;box-shadow:var(--shl);flex:none}
-h1{font-size:19px;margin:0;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.ver{font-size:11px;font-weight:600;color:var(--pri);background:var(--pri-soft);padding:2px 8px;
-border-radius:999px;letter-spacing:0}
-.sub{font-size:12.5px;margin-top:3px}
-.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
-.stat{padding:16px 18px;display:flex;flex-direction:column;gap:2px;position:relative;overflow:hidden}
-.stat .ico{position:absolute;right:14px;top:11px;font-size:20px;opacity:.45}
-.stat .lab{font-size:12.5px;font-weight:600;color:var(--mut);letter-spacing:.02em}
-.stat b{font-size:26px;line-height:1.25;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.stat .hint{font-size:12px;color:var(--mut)}
-.alert{padding:13px 16px;margin-bottom:16px;border-color:var(--bad);color:var(--bad);background:var(--badb);
-display:none;white-space:pre-wrap;border-radius:14px}
-.warnbox{padding:13px 16px;margin-bottom:16px;border-color:#fcd34d;color:var(--warn);background:var(--warnb);
-display:none;white-space:pre-wrap;font-size:13px;border-radius:14px}
-.tblwrap{overflow:auto;padding:2px 0}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
-th{position:sticky;top:0;background:var(--card);font-size:11.5px;color:var(--mut);font-weight:700;
-text-transform:uppercase;letter-spacing:.06em;z-index:1}
-tbody tr{transition:background .15s}tbody tr:hover{background:var(--card2)}
-tbody tr:last-child td{border-bottom:none}
-td.num{text-align:right;font-variant-numeric:tabular-nums}
-.fwdcell{font-weight:600}.fwdcell .mono{font-weight:400;margin-top:2px}
-.sec{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:24px 2px 12px}
-.sec h3{margin:0;font-size:16px;letter-spacing:-.01em}
-.empty{padding:46px 22px;text-align:center;line-height:1.9}
-#toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:9px;z-index:20;
-max-width:min(400px,92vw)}
-.toast{padding:11px 15px;border-radius:12px;color:#fff;background:#111827;box-shadow:0 16px 40px -12px #0006;
-font-size:14px}
-.toast.ok{background:linear-gradient(135deg,#059669,#10b981)}
-.toast.bad{background:linear-gradient(135deg,#b91c1c,#ef4444)}
-@media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.wrap{padding:12px 10px 36px}
-.topbar{padding:14px}.acts{width:100%}}
-</style></head><body><div class="wrap">
-<header class="topbar card">
-<div class="brand"><div class="mark" aria-hidden="true">🌐</div>
-<div style="min-width:0"><h1>落地节点汇总 <span class="ver">v{V}</span></h1>
-<div class="sub mut" id="hinfo">加载中…</div></div></div>
-<div class="acts"><a class="btn" href="{P}/">← 转发机</a>
-<button class="btn" id="bRef" type="button">↻ 刷新</button>
-<form method="post" action="{P}/logout" style="margin:0"><input type="hidden" name="csrf" value="{C}"><button class="btn" type="submit">退出</button></form></div></header>
+<title>落地节点 · att-tunnel-hub</title><style>{CSS}</style></head>
+<body><div class="app">
+<aside class="sidebar">
+<a class="brand" href="{P}/"><div class="mark" aria-hidden="true">🛰️</div>
+<div class="brand-txt"><b>att-tunnel-hub</b><span>v{V}</span></div></a>
+<nav class="nav" aria-label="主导航">
+<a class="nav-item" href="{P}/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg><span>转发机</span><span class="nav-count" id="navFwd">—</span></a>
+<a class="nav-item active" href="{P}/nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg><span>落地节点</span><span class="nav-count" id="navNodes">—</span></a>
+</nav>
+<div class="side-note"><div class="side-note-title"><span class="dot"></span>面板运行中</div>
+<p>跨转发机汇总所有落地节点，数据来自各机实时上报。</p></div>
+<div class="side-foot"><form method="post" action="{P}/logout"><input type="hidden" name="csrf" value="{C}"><button class="btn ghost" type="submit">退出登录</button></form></div>
+</aside>
+<div class="main">
+<header class="topbar"><div class="page-head"><h1>落地节点</h1>
+<p class="sub" id="hinfo">加载中…</p></div>
+<div class="acts"><button class="btn" id="bRef" type="button">↻ 刷新</button></div></header>
+<main class="content">
 <div class="card alert" id="err" role="alert"></div>
 <div class="card warnbox" id="warn"></div>
 <div class="stats" id="sum"></div>
-<div class="sec"><h3>所有落地节点</h3><span class="mut" style="font-size:12.5px" id="meta" aria-live="polite"></span></div>
-<div class="card tblwrap" id="tbl"></div></div>
+<div class="sec"><div><h3>所有落地节点</h3><p class="sec-sub">按转发机分组，显示出口 IP、入口端口与实时速率</p></div>
+<span id="meta" aria-live="polite"></span></div>
+<div class="card tblwrap" id="tbl"></div>
+</main></div></div>
 <div id="toasts" aria-live="polite"></div>
 '''
 PAGE_NODES += '''
@@ -811,6 +883,11 @@ function toast(m,k){const d=document.createElement("div");d.className="toast "+(
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function fb(n){n=+n||0;const u=["B","KB","MB","GB","TB","PB"];let i=0;
   while(n>=1024&&i<5){n/=1024;i++}return(i?n.toFixed(n<10?2:n<100?1:0):n)+" "+u[i];}
+const SI={
+fwd:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>',
+on:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+globe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg>',
+chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-3"/></svg>'};
 function row(n){
   const cls=n.online?"on":"off", txt=n.online?"在线":"离线";
   const ip=n.ip?esc(n.ip):'<span class="mut">—</span>';
@@ -822,7 +899,7 @@ function row(n){
     +'<td class="num">'+esc(n.port)+'</td>'
     +'<td class="mono">'+esc(n.sni||"—")+'</td>'
     +'<td class="num">'+fb(n.total)+'</td>'
-    +'<td class="num mut">↑'+fb(n.rate_up)+'/s ↓'+fb(n.rate_down)+'/s</td>'
+    +'<td class="num mut">'+((+n.rate_up||+n.rate_down)?'↑'+fb(n.rate_up)+'/s ↓'+fb(n.rate_down)+'/s':'—')+'</td>'
     +'<td><a class="btn s" href="'+P+'/f/'+encodeURIComponent(n.fwd)+'/">管理</a></td></tr>';
 }
 async function load(){
@@ -834,11 +911,13 @@ async function load(){
     const ns=d.nodes||[], fs=d.forwarders||[];
     const on=ns.filter(n=>n.online).length;
     const total=ns.reduce((s,n)=>s+(+n.total||0),0);
+    $("#navFwd").textContent=fs.length;
+    $("#navNodes").textContent=ns.length;
     $("#sum").innerHTML=
-      '<div class="stat card"><span class="ico" aria-hidden="true">🛰️</span><span class="lab">转发机</span><b>'+fs.length+'</b><span class="hint">已登记</span></div>'
-     +'<div class="stat card"><span class="ico" aria-hidden="true">🌐</span><span class="lab">落地节点</span><b>'+ns.length+'</b><span class="hint">全部节点</span></div>'
-     +'<div class="stat card"><span class="ico" aria-hidden="true">🟢</span><span class="lab">节点在线</span><b>'+on+'</b><span class="hint">'+ns.length+' 个中在线</span></div>'
-     +'<div class="stat card"><span class="ico" aria-hidden="true">📊</span><span class="lab">累计流量</span><b>'+fb(total)+'</b><span class="hint">全部节点合计</span></div>';
+      '<div class="stat card"><span class="ico" aria-hidden="true">'+SI.fwd+'</span><span class="lab">转发机</span><b>'+fs.length+'</b><span class="hint">已登记</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">'+SI.globe+'</span><span class="lab">落地节点</span><b>'+ns.length+'</b><span class="hint">全部节点</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">'+SI.on+'</span><span class="lab">节点在线</span><b>'+on+'</b><span class="hint">'+ns.length+' 个中在线</span></div>'
+     +'<div class="stat card"><span class="ico" aria-hidden="true">'+SI.chart+'</span><span class="lab">累计流量</span><b>'+fb(total)+'</b><span class="hint">全部节点合计</span></div>';
     const okf=fs.filter(f=>!f.error);
     $("#hinfo").innerHTML='<span>已取到 '+okf.length+'/'+fs.length+' 台转发机的节点</span>';
     const bad=fs.filter(f=>f.error);
@@ -853,7 +932,7 @@ async function load(){
         +'<th>入口端口</th><th>伪装域名</th><th>累计流量</th><th>当前速率</th><th></th></tr></thead>'
         +'<tbody>'+ns.map(row).join("")+'</tbody></table>'
       :'<div class="empty"><b>还没有落地节点</b><span class="mut">进某台转发机的「管理落地机」添加节点。</span></div>';
-    $("#meta").textContent="更新于 "+new Date().toLocaleTimeString();
+    $("#meta").textContent="更新于 "+new Date().toLocaleTimeString('zh-CN',{hour12:false});
     $("#err").style.display="none";
   }catch(e){
     $("#err").textContent="读取失败："+e.message;$("#err").style.display="block";
