@@ -10,7 +10,7 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.9.11"
+VERSION="1.10.0"
 # att-tunnel 网页面板（--web）和「添加节点可填 SSH 直装出口机」都还在 PR #2 分支上，
 # main 仍是 v2.0.0。先固定到含 SSH 直装和链接二维码 / 订阅的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/e6dad7f31b07beb7f6df33f20802b1a39c4b4f1a/install.sh}"
@@ -62,6 +62,19 @@ pubip(){
     [ -n "${ip:-}" ] && { echo "$ip"; return 0; }
   done
   return 1
+}
+
+# 从本仓库取一个静态资源（JS/CSS，不做 Python 语法检查）
+fetch_asset(){
+  local name="$1" dest="$2" src
+  src="$(dirname "${BASH_SOURCE[0]}")/$name"
+  if [ -f "$src" ]; then
+    cp "$src" "$dest"
+  else
+    curl -fsSL "${HUB_RAW_URL%/install.sh}/$name" -o "$dest" \
+      || die "下载 $name 失败"
+  fi
+  chmod 644 "$dest"
 }
 
 # 从本仓库取一个文件（hub.py / agent.py）：优先同目录（本地调试），否则按 RAW 地址拉
@@ -116,6 +129,11 @@ install_panel(){
   fi
 
   fetch_file hub.py "$HUB_DIR/hub.py"
+  fetch_file sshterm.py "$HUB_DIR/sshterm.py"
+  mkdir -p "$HUB_DIR/static"
+  fetch_asset static/xterm.js "$HUB_DIR/static/xterm.js"
+  fetch_asset static/xterm.css "$HUB_DIR/static/xterm.css"
+  fetch_asset static/addon-fit.js "$HUB_DIR/static/addon-fit.js"
 
   cat > "$HUB_ETC/hub.env" <<EOF
 # att-tunnel-hub 面板配置（v$VERSION）

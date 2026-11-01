@@ -24,6 +24,8 @@ import threading
 import time
 import urllib.parse
 
+import sshterm
+
 VERSION = 'HUB_VERSION'
 ENVF = os.environ.get('HUB_ENV', '/etc/att-hub/hub.env')
 STATEF = os.environ.get('HUB_STATE', '/var/lib/att-hub/state.json')
@@ -36,6 +38,9 @@ OFFLINE_AFTER = 45        # 超过这么多秒没 poll 视为离线
 NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{20,64}$')     # att-tunnel 面板的订阅 token
 IP_RE = re.compile(r'^[A-Za-z0-9.:_-]{3,253}$')
+SSH_HOST_RE = re.compile(r'^[A-Za-z0-9._\-\[\]:]{3,253}$')
+SSH_USER_RE = re.compile(r'^[A-Za-z0-9._-]{1,32}$')
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 
 
 def log(*a):
@@ -649,6 +654,7 @@ PAGE_MAIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <nav class="nav" aria-label="主导航">
 <a class="nav-item active" href="{P}/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg><span>转发机</span><span class="nav-count" id="navFwd">—</span></a>
 <a class="nav-item" href="{P}/nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg><span>落地节点</span><span class="nav-count" id="navNodes">—</span></a>
+<a class="nav-item" href="{P}/ssh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><path d="M13 15h4"/></svg><span>在线 SSH</span></a>
 </nav>
 <div class="side-note"><div class="side-note-title"><span class="dot"></span>面板运行中</div>
 <p>统一管理转发机与落地节点，业务流量不经过面板机。</p></div>
@@ -856,6 +862,7 @@ PAGE_NODES = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <nav class="nav" aria-label="主导航">
 <a class="nav-item" href="{P}/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg><span>转发机</span><span class="nav-count" id="navFwd">—</span></a>
 <a class="nav-item active" href="{P}/nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg><span>落地节点</span><span class="nav-count" id="navNodes">—</span></a>
+<a class="nav-item" href="{P}/ssh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><path d="M13 15h4"/></svg><span>在线 SSH</span></a>
 </nav>
 <div class="side-note"><div class="side-note-title"><span class="dot"></span>面板运行中</div>
 <p>跨转发机汇总所有落地节点，数据来自各机实时上报。</p></div>
@@ -947,6 +954,93 @@ load();setInterval(load,30000);
 '''
 
 
+PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>在线 SSH · att-tunnel-hub</title><style>{CSS}</style>
+<link rel="stylesheet" href="{P}/static/xterm.css">
+<style>
+.sshform{display:grid;grid-template-columns:minmax(200px,2fr) 90px minmax(120px,1fr);gap:10px}
+@media(max-width:760px){.sshform{grid-template-columns:1fr}}
+.termwrap{height:62vh;min-height:380px;background:#0b1120;border:1px solid var(--line);border-radius:12px;padding:8px;margin-top:14px;overflow:hidden}
+#term{height:100%}#term .xterm{height:100%}
+</style></head>
+<body><div class="app">
+<aside class="sidebar">
+<a class="brand" href="{P}/"><div class="mark" aria-hidden="true">🛰️</div>
+<div class="brand-txt"><b>att-tunnel-hub</b><span>v{V}</span></div></a>
+<nav class="nav" aria-label="主导航">
+<a class="nav-item" href="{P}/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg><span>转发机</span><span class="nav-count" id="navFwd">—</span></a>
+<a class="nav-item" href="{P}/nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg><span>落地节点</span><span class="nav-count" id="navNodes">—</span></a>
+<a class="nav-item active" href="{P}/ssh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><path d="M13 15h4"/></svg><span>在线 SSH</span></a>
+</nav>
+<div class="side-note"><div class="side-note-title"><span class="dot"></span>面板运行中</div>
+<p>在浏览器里直接连服务器；凭据只用于本次会话，不保存。</p></div>
+<div class="side-foot"><form method="post" action="{P}/logout"><input type="hidden" name="csrf" value="{C}"><button class="btn ghost" type="submit">退出登录</button></form></div>
+</aside>
+<div class="main">
+<header class="topbar"><div class="page-head"><h1>在线 SSH</h1>
+<p class="sub">输入 IP / 端口 / 用户名 / 密码，浏览器里直接开会话；不传文件</p></div></header>
+<main class="content">
+<div class="card" style="padding:18px">
+<form id="fSsh" autocomplete="off">
+<div class="sshform">
+<div><label for="sHost">服务器 IP / 域名</label><input id="sHost" required placeholder="1.2.3.4" autocomplete="off"></div>
+<div><label for="sPort">端口</label><input id="sPort" value="22" inputmode="numeric" pattern="[0-9]{1,5}"></div>
+<div><label for="sUser">用户名</label><input id="sUser" value="root" autocomplete="off"></div>
+</div>
+<label for="sPass">密码（只用于本次连接，不保存）</label><input id="sPass" type="password" required autocomplete="new-password">
+<div class="acts" style="margin-top:12px">
+<button class="btn p" id="sGo" type="submit">连接</button>
+<button class="btn" id="sDisc" type="button" hidden>断开</button>
+<span id="sMsg" class="mut" style="font-size:13px;align-self:center"></span>
+</div>
+</form>
+<div id="termWrap" class="termwrap" hidden><div id="term"></div></div>
+<p class="mut" style="font-size:12.5px;margin:12px 0 0">主机指纹首次连接会自动接受并记录在临时目录；面板不保存 SSH 密码，关闭页面即断开。只提供终端，不支持上传/下载。</p>
+</div>
+</main></div></div>
+<div id="toasts" aria-live="polite"></div>
+<script src="{P}/static/xterm.js"></script>
+<script src="{P}/static/addon-fit.js"></script>
+<script>
+const P="{P}",C="{C}";
+const $=s=>document.getElementById(s);
+function msg(t,k){const e=$("sMsg");e.textContent=t;e.className=(k==="bad")?"err":"mut";}
+async function post(u,b){const r=await fetch(P+u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":C},body:new URLSearchParams(b||{})});
+if(r.status===401){location.href=P+"/";throw new Error("登录已过期")}let j={};try{j=await r.json()}catch(e){}
+if(!r.ok||!j.ok)throw new Error(j.error||("HTTP "+r.status));return j}
+let ws=null,term=null,fit=null;
+function initTerm(){
+ if(term)return;
+ term=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1120',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
+ fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open($("term"));fit.fit();
+ term.onData(d=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"i",d}))});
+ term.onResize(({cols,rows})=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"r",cols,rows}))});
+ window.addEventListener("resize",()=>{if(term){try{fit.fit()}catch(e){}}});
+}
+$("fSsh").onsubmit=async ev=>{
+ ev.preventDefault();
+ if(ws)return;
+ const host=$("sHost").value.trim(),port=$("sPort").value.trim()||"22",user=$("sUser").value.trim()||"root",pass=$("sPass").value;
+ if(!host||!pass){msg("请填 IP 和密码","bad");return}
+ $("sGo").disabled=true;$("sGo").textContent="连接中…";msg("正在建立 SSH 会话…");
+ try{
+  const j=await post("/api/ssh/connect",{host,port,user,password:pass});
+  $("termWrap").hidden=false;initTerm();term.reset();fit.fit();
+  const proto=(location.protocol==="https:")?"wss":"ws";
+  const url=proto+"://"+location.host+P+"/ssh/ws?id="+encodeURIComponent(j.id)+"&cols="+term.cols+"&rows="+term.rows;
+  ws=new WebSocket(url);ws.binaryType="arraybuffer";
+  ws.onopen=()=>{$("sDisc").hidden=false;$("sGo").disabled=true;$("sGo").textContent="已连接";$("sPass").value="";msg("已连接 "+user+"@"+host);fit.fit();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
+  ws.onmessage=e=>{if(typeof e.data==="string"){term.write(e.data)}else{term.write(new Uint8Array(e.data))}};
+  ws.onerror=()=>{msg("连接出错","bad")};
+  ws.onclose=()=>{ws=null;$("sDisc").hidden=true;$("sGo").disabled=false;$("sGo").textContent="连接";msg("已断开");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
+ }catch(x){msg("连接失败："+x.message,"bad");$("sGo").disabled=false;$("sGo").textContent="连接"}
+};
+$("sDisc").onclick=()=>{if(ws)ws.close()};
+window.addEventListener("beforeunload",()=>{if(ws)ws.close()});
+</script></body></html>'''
+
+
 # ---------------------------------------------------------------- HTTP
 class H(http.server.BaseHTTPRequestHandler):
     server_version = 'att-hub'
@@ -1000,6 +1094,26 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def jsend(self, code, obj):
         self.send(code, json.dumps(obj, ensure_ascii=False), 'application/json; charset=utf-8')
+
+    def send_static(self, r):
+        name = r[len('/static/'):]
+        if name not in ('xterm.js', 'xterm.css', 'addon-fit.js'):
+            return self.send(404, 'Not Found', 'text/plain')
+        path = os.path.join(STATIC_DIR, name)
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+        except OSError:
+            return self.send(404, 'Not Found', 'text/plain')
+        ctype = ('text/css; charset=utf-8' if name.endswith('.css')
+                 else 'application/javascript; charset=utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'public, max-age=86400')
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(data)
 
     def redirect(self, loc, extra=()):
         self.send(303, '', 'text/plain', list(extra) + [('Location', loc)])
@@ -1128,6 +1242,8 @@ class H(http.server.BaseHTTPRequestHandler):
         r = self.route()
         if r is None:
             return self.send(404, 'Not Found', 'text/plain')
+        if r.startswith('/static/'):
+            return self.send_static(r)
         sid, s = self.session()
         if r == '/':
             if not s:
@@ -1145,6 +1261,16 @@ class H(http.server.BaseHTTPRequestHandler):
             page = (PAGE_NODES.replace('{CSS}', CSS).replace('{P}', PREFIX)
                     .replace('{C}', s['csrf']).replace('{V}', VERSION))
             return self.send(200, page)
+        if r == '/ssh':
+            if not s:
+                return self.login_page(200)
+            page = (PAGE_SSH.replace('{CSS}', CSS).replace('{P}', PREFIX)
+                    .replace('{C}', s['csrf']).replace('{V}', VERSION))
+            return self.send(200, page)
+        if r == '/ssh/ws':
+            if not s:
+                return self.send(403, '请先登录', 'text/plain; charset=utf-8')
+            return sshterm.handle_ws(self)
         if r == '/api/nodes':
             if not s:
                 return self.jsend(401, {'error': 'unauthorized'})
@@ -1214,6 +1340,8 @@ class H(http.server.BaseHTTPRequestHandler):
             ck = ('hub_sid=; Path=%s; HttpOnly; SameSite=Strict; Max-Age=0%s'
                   % (PREFIX, '; Secure' if COOKIE_SECURE else ''))
             return self.redirect(PREFIX + '/', [('Set-Cookie', ck)])
+        if r == '/api/ssh/connect':
+            return self.do_ssh_connect(f)
         if r == '/api/add':
             return self.do_add(f)
         if r == '/api/edit':
@@ -1233,6 +1361,24 @@ class H(http.server.BaseHTTPRequestHandler):
         if r == '/api/upgrade':
             return self.do_upgrade(f)
         return self.send(404, 'Not Found', 'text/plain')
+
+    def do_ssh_connect(self, f):
+        host = (f.get('host') or '').strip()
+        port = (f.get('port') or '22').strip()
+        user = (f.get('user') or 'root').strip()
+        pw = f.get('password') or ''
+        if not SSH_HOST_RE.match(host):
+            return self.jsend(400, {'error': '服务器 IP / 域名格式不对'})
+        if not (port.isdigit() and 1 <= int(port) <= 65535):
+            return self.jsend(400, {'error': '端口必须是 1-65535'})
+        if not SSH_USER_RE.match(user):
+            return self.jsend(400, {'error': 'SSH 用户名格式不对'})
+        if not pw:
+            return self.jsend(400, {'error': '请填 SSH 密码'})
+        if '\n' in pw or '\r' in pw:
+            return self.jsend(400, {'error': '密码里不能有换行'})
+        sid = sshterm.new_session(host, int(port), user, pw)
+        return self.jsend(200, {'ok': True, 'id': sid})
 
     def do_add(self, f):
         name = f.get('name', '').strip()

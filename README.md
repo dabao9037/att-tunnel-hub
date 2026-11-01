@@ -58,6 +58,7 @@ curl -L .../install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh 
 - 编辑可改名称、IP、备注；密钥不变，所以改完不用重装 agent，落地机也不受影响
 - 点进任意转发机，用 att-tunnel 原生页面加 / 删落地机、看流量、出口 IP、分享链接
 - 「落地节点汇总」页一张表看完所有转发机下面的落地节点：在线状态、出口 IP、入口端口、伪装域名、累计流量和当前速率；哪台转发机没取到数据会单独提示原因
+- **在线 SSH**：输入 IP / 端口 / 用户名 / 密码，直接在浏览器里开一个终端；只做终端，不支持上传/下载
 
 ## 管理命令
 
@@ -81,11 +82,12 @@ att-hub uninstall    # 卸载面板程序，保留配置和记录
 - 每台转发机一个独立 token。token 只在生成一键代码时显示，等于那台机器的凭据，请当密码保管。
 - 面板发给 agent 的只有「打给本机 att-tunnel 面板的 HTTP 请求」，**没有任意命令执行通道**。
 - 转发机本机的 att-tunnel 面板会被收回只监听 `127.0.0.1`，只有 agent 能访问，不对外暴露。
+- 在线 SSH：密码只存在内存和本次会话的 0600 临时文件里，连接结束即删除；主机指纹首次连接自动接受（临时 known_hosts），面板不保存 SSH 凭据；WebSocket 需要面板登录会话 + 一次性 ticket。
 - 面板默认是明文 HTTP。放到公网请套域名 + HTTPS（nginx + certbot），然后 `att-hub listen 127.0.0.1` 收回本地监听，并在 `hub.env` 里设 `WEB_COOKIE_SECURE=1`、`WEB_TRUST_PROXY=1`。
 
 ## 依赖
 
-面板机和转发机都只需要 `python3 >= 3.8` 和 `curl`，没有第三方 Python 包，没有外部 CDN。Debian / Ubuntu。
+面板机和转发机都只需要 `python3 >= 3.8` 和 `curl`，没有第三方 Python 包，没有外部 CDN。在线 SSH 需要 `ssh` 和 `sshpass`（面板机安装脚本会检查；没有的话该功能会明确报错）。前端终端使用 vendored 的 xterm.js 5.x（MIT，见 `static/LICENSE-xterm`）。Debian / Ubuntu。
 
 ## 许可
 
