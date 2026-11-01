@@ -970,9 +970,9 @@ PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 .termacts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .termbar .btn{background:#1e293b;color:#e5e7eb;border-color:#334155;padding:5px 9px;font-size:12px;border-radius:8px}
 .termbar .btn:hover{border-color:#60a5fa}
-.termwrap{flex:1;min-height:0;background:#0b1020;padding:6px;overflow:hidden;touch-action:none;overscroll-behavior:contain}
+.termwrap{flex:1;min-height:0;background:#0b1020;padding:6px;overflow:hidden;touch-action:pan-y;overscroll-behavior:contain}
 #term{height:100%}#term .xterm{height:100%}
-#term .xterm-viewport{overscroll-behavior:contain;touch-action:none}
+#term .xterm-viewport{overscroll-behavior:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch}
 .textscreen{position:fixed;inset:0;z-index:110;background:#0b1020;display:flex;flex-direction:column;color:#e5e7eb}
 #selText{flex:1;width:100%;margin:0;padding:12px;border:0;outline:none;background:#0f172a;color:#e5e7eb;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:none;white-space:pre;overflow:auto;-webkit-user-select:text;user-select:text}
 body.term-mode{overflow:hidden}
@@ -1040,6 +1040,7 @@ body.term-mode{overflow:hidden}
 <div id="toasts" aria-live="polite"></div>
 <script src="{P}/static/xterm.js"></script>
 <script src="{P}/static/addon-fit.js"></script>
+<script src="{P}/static/addon-webgl.js"></script>
 <script>
 const P="{P}",C="{C}";
 const $=s=>document.getElementById(s);
@@ -1069,8 +1070,11 @@ function quick(on){["qIp","qTq"].forEach(id=>{const b=$(id);if(b)b.disabled=!on}
 function sendCmd(cmd){if(ws&&ws.readyState===1){ws.send(JSON.stringify({t:"i",d:cmd+"\n"}));term.focus()}}
 function initTerm(){
  if(term)return;
- term=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
+ term=new Terminal({cursorBlink:true,fontSize:14,scrollback:2000,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
  fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open($("term"));
+ try{const c=document.createElement("canvas");if(window.WebglAddon&&c.getContext("webgl2")){const wg=new WebglAddon.WebglAddon();term.loadAddon(wg);wg.onContextLoss(()=>{try{wg.dispose()}catch(e){}})}}catch(e){}
+ const vp=term.element&&term.element.querySelector(".xterm-viewport");
+ if(vp){const stopTouch=e=>e.stopPropagation();vp.addEventListener("touchstart",stopTouch,{passive:true});vp.addEventListener("touchmove",stopTouch,{passive:true});vp.addEventListener("touchend",()=>{try{term.focus()}catch(e){}},{passive:true})}
  term.onData(d=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"i",d}))});
  term.onResize(({cols,rows})=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"r",cols,rows}))});
  term.onSelectionChange(()=>{if($("cSel"))$("cSel").disabled=!term.hasSelection()});
@@ -1192,7 +1196,7 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def send_static(self, r):
         name = r[len('/static/'):]
-        if name not in ('xterm.js', 'xterm.css', 'addon-fit.js'):
+        if name not in ('xterm.js', 'xterm.css', 'addon-fit.js', 'addon-webgl.js'):
             return self.send(404, 'Not Found', 'text/plain')
         path = os.path.join(STATIC_DIR, name)
         try:
