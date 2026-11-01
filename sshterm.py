@@ -204,6 +204,18 @@ def handle_ws(handler):
         th = threading.Thread(target=reader, daemon=True)
         th.start()
 
+        def pinger():
+            while not stop.is_set():
+                if stop.wait(25):
+                    break
+                try:
+                    _send_frame(conn, wlock, 0x9, b'')
+                except Exception:
+                    break
+
+        ping_th = threading.Thread(target=pinger, daemon=True)
+        ping_th.start()
+
         try:
             pending_op = None
             pending = b''
@@ -213,6 +225,8 @@ def handle_ws(handler):
                     break
                 if op == 0x9:
                     _send_frame(conn, wlock, 0xA, data)
+                    continue
+                if op == 0xA:
                     continue
                 if op in (0x1, 0x2):
                     if not fin:
@@ -228,6 +242,8 @@ def handle_ws(handler):
                     except ValueError:
                         continue
                     t = msg.get('t')
+                    if t == 'p':
+                        continue
                     if t == 'i':
                         d = msg.get('d') or ''
                         if d:
@@ -250,10 +266,11 @@ def handle_ws(handler):
                 os.waitpid(pid, 0)
             except OSError:
                 pass
-            try:
-                th.join(timeout=2)
-            except Exception:
-                pass
+            for t in (th, ping_th):
+                try:
+                    t.join(timeout=2)
+                except Exception:
+                    pass
     except Exception as e:
         try:
             say('\r\n\x1b[31m[SSH 连接失败：%s]\x1b[0m\r\n' % str(e)[:200])

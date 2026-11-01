@@ -995,6 +995,11 @@ PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <span id="sMsg" class="mut" style="font-size:13px;align-self:center"></span>
 </div>
 </form>
+<div class="acts" style="margin-top:10px">
+<span class="mut" style="font-size:13px;align-self:center">快捷输入：</span>
+<button class="btn s" id="qIp" type="button" disabled title="bash <(curl -sL IP.Check.Place)">IP 检测</button>
+<button class="btn s" id="qTq" type="button" disabled title="bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)">TQ</button>
+</div>
 <div id="termWrap" class="termwrap" hidden><div id="term"></div></div>
 <p class="mut" style="font-size:12.5px;margin:12px 0 0">主机指纹首次连接会自动接受并记录在临时目录；面板不保存 SSH 密码，关闭页面即断开。只提供终端，不支持上传/下载。</p>
 </div>
@@ -1009,7 +1014,11 @@ function msg(t,k){const e=$("sMsg");e.textContent=t;e.className=(k==="bad")?"err
 async function post(u,b){const r=await fetch(P+u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":C},body:new URLSearchParams(b||{})});
 if(r.status===401){location.href=P+"/";throw new Error("登录已过期")}let j={};try{j=await r.json()}catch(e){}
 if(!r.ok||!j.ok)throw new Error(j.error||("HTTP "+r.status));return j}
-let ws=null,term=null,fit=null;
+let ws=null,term=null,fit=null,ka=null;
+function startKA(){stopKA();ka=setInterval(()=>{if(ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){}}},20000)}
+function stopKA(){if(ka){clearInterval(ka);ka=null}}
+function quick(on){["qIp","qTq"].forEach(id=>{const b=$(id);if(b)b.disabled=!on})}
+function sendCmd(cmd){if(ws&&ws.readyState===1){ws.send(JSON.stringify({t:"i",d:cmd+"\n"}));term.focus()}}
 function initTerm(){
  if(term)return;
  term=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1120',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
@@ -1030,14 +1039,17 @@ $("fSsh").onsubmit=async ev=>{
   const proto=(location.protocol==="https:")?"wss":"ws";
   const url=proto+"://"+location.host+P+"/ssh/ws?id="+encodeURIComponent(j.id)+"&cols="+term.cols+"&rows="+term.rows;
   ws=new WebSocket(url);ws.binaryType="arraybuffer";
-  ws.onopen=()=>{$("sDisc").hidden=false;$("sGo").disabled=true;$("sGo").textContent="已连接";$("sPass").value="";msg("已连接 "+user+"@"+host);fit.fit();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
+  ws.onopen=()=>{$("sDisc").hidden=false;$("sGo").disabled=true;$("sGo").textContent="已连接";$("sPass").value="";msg("已连接 "+user+"@"+host);fit.fit();quick(true);startKA();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
   ws.onmessage=e=>{if(typeof e.data==="string"){term.write(e.data)}else{term.write(new Uint8Array(e.data))}};
   ws.onerror=()=>{msg("连接出错","bad")};
-  ws.onclose=()=>{ws=null;$("sDisc").hidden=true;$("sGo").disabled=false;$("sGo").textContent="连接";msg("已断开");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
- }catch(x){msg("连接失败："+x.message,"bad");$("sGo").disabled=false;$("sGo").textContent="连接"}
+  ws.onclose=()=>{ws=null;stopKA();quick(false);$("sDisc").hidden=true;$("sGo").disabled=false;$("sGo").textContent="连接";msg("已断开");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
+ }catch(x){msg("连接失败："+x.message,"bad");quick(false);$("sGo").disabled=false;$("sGo").textContent="连接"}
 };
+$("qIp").onclick=()=>sendCmd("bash <(curl -sL IP.Check.Place)");
+$("qTq").onclick=()=>sendCmd("bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)");
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){};try{fit.fit()}catch(e){};term.focus()}});
 $("sDisc").onclick=()=>{if(ws)ws.close()};
-window.addEventListener("beforeunload",()=>{if(ws)ws.close()});
+window.addEventListener("beforeunload",()=>{stopKA();if(ws)ws.close()});
 </script></body></html>'''
 
 

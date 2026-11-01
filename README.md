@@ -59,6 +59,8 @@ curl -L .../install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh 
 - 点进任意转发机，用 att-tunnel 原生页面加 / 删落地机、看流量、出口 IP、分享链接
 - 「落地节点汇总」页一张表看完所有转发机下面的落地节点：在线状态、出口 IP、入口端口、伪装域名、累计流量和当前速率；哪台转发机没取到数据会单独提示原因
 - **在线 SSH**：输入 IP / 端口 / 用户名 / 密码，直接在浏览器里开一个终端；只做终端，不支持上传/下载
+  - 会话保活：服务端每 25 秒发 WebSocket ping，前端每 20 秒发保活；切后台/切标签页回来会重新适配终端。
+  - 快捷输入：内置「IP 检测」（`bash <(curl -sL IP.Check.Place)`）和「TQ」（`bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)`）两个按钮，点一下直接执行。
 
 ## 管理命令
 
