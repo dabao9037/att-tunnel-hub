@@ -395,6 +395,7 @@ def collect_nodes(timeout=40.0):
                 'rate_up': n.get('rate_up') or 0,
                 'rate_down': n.get('rate_down') or 0,
                 'probe_err': n.get('probe_err', ''),
+                'ssh': n.get('ssh'),          # SSH 直装出口机的实时进度（来自转发机面板）
             })
             meta['count'] += 1
     return {'now': now(), 'nodes': nodes, 'forwarders': metas}
@@ -889,9 +890,10 @@ on:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8
 globe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg>',
 chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-3"/></svg>'};
 function row(n){
-  const cls=n.online?"on":"off", txt=n.online?"在线":"离线";
+  let cls=n.online?"on":"off", txt=n.online?"在线":"离线", tip=n.probe_err?' title="'+esc(n.probe_err)+'"':'';
+  if(n.ssh&&!n.ssh.done){cls="w";txt="安装中 "+(+n.ssh.pct||0)+"%";tip=' title="'+esc((n.ssh.state||"")+" · "+(+n.ssh.elapsed||0)+" 秒")+'"';}
+  else if(n.ssh&&n.ssh.done&&n.ssh.rc!==0){cls="off";txt="安装失败";tip=' title="'+esc("SSH 直装出口机失败（rc="+n.ssh.rc+"），到转发机面板点「查看链接」看日志")+'"';}
   const ip=n.ip?esc(n.ip):'<span class="mut">—</span>';
-  const tip=n.probe_err?' title="'+esc(n.probe_err)+'"':'';
   return '<tr><td class="fwdcell">'+esc(n.fwd)+'<div class="mut mono">'+esc(n.fwd_ip)+'</div></td>'
     +'<td>'+esc(n.name)+'</td>'
     +'<td><span class="pill '+cls+'"'+tip+'>'+txt+'</span></td>'
