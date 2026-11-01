@@ -999,6 +999,9 @@ PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <span class="mut" style="font-size:13px;align-self:center">快捷输入：</span>
 <button class="btn s" id="qIp" type="button" disabled title="bash <(curl -sL IP.Check.Place)">IP 检测</button>
 <button class="btn s" id="qTq" type="button" disabled title="bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)">TQ</button>
+<span style="width:8px"></span>
+<button class="btn s" id="cSel" type="button" disabled>复制选中</button>
+<button class="btn s" id="cAll" type="button" disabled>复制全部</button>
 </div>
 <div id="termWrap" class="termwrap" hidden><div id="term"></div></div>
 <p class="mut" style="font-size:12.5px;margin:12px 0 0">主机指纹首次连接会自动接受并记录在临时目录；面板不保存 SSH 密码，关闭页面即断开。只提供终端，不支持上传/下载。</p>
@@ -1019,12 +1022,18 @@ function startKA(){stopKA();ka=setInterval(()=>{if(ws&&ws.readyState===1){try{ws
 function stopKA(){if(ka){clearInterval(ka);ka=null}}
 function quick(on){["qIp","qTq"].forEach(id=>{const b=$(id);if(b)b.disabled=!on})}
 function sendCmd(cmd){if(ws&&ws.readyState===1){ws.send(JSON.stringify({t:"i",d:cmd+"\n"}));term.focus()}}
+function copyText(t){if(!t){msg("没有可复制的内容","bad");return}
+ if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(()=>msg("已复制 "+t.length+" 字符"),()=>fallbackCopy(t))}else{fallbackCopy(t)}}
+function fallbackCopy(t){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();try{document.execCommand("copy");msg("已复制 "+t.length+" 字符")}catch(e){msg("复制失败，请手动选择","bad")}a.remove()}
+function allText(){if(!term)return "";const b=term.buffer.active;const out=[];for(let i=0;i<b.length;i++){const l=b.getLine(i);if(l)out.push(l.translateToString(true))}return out.join("\n").replace(/\s+$/,"")}
 function initTerm(){
  if(term)return;
  term=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1120',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
- fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open($("term"));fit.fit();
+ fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open($("term"));try{fit.fit()}catch(e){}
  term.onData(d=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"i",d}))});
  term.onResize(({cols,rows})=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"r",cols,rows}))});
+ term.onSelectionChange(()=>{if($("cSel"))$("cSel").disabled=!term.hasSelection()});
+ term.attachCustomKeyEventHandler(e=>{if(e.type==="keydown"&&(e.ctrlKey||e.metaKey)&&(e.key==="c"||e.key==="C")&&term.hasSelection()){copyText(term.getSelection());return false}return true});
  window.addEventListener("resize",()=>{if(term){try{fit.fit()}catch(e){}}});
 }
 $("fSsh").onsubmit=async ev=>{
@@ -1035,16 +1044,20 @@ $("fSsh").onsubmit=async ev=>{
  $("sGo").disabled=true;$("sGo").textContent="连接中…";msg("正在建立 SSH 会话…");
  try{
   const j=await post("/api/ssh/connect",{host,port,user,password:pass});
-  $("termWrap").hidden=false;initTerm();term.reset();fit.fit();
+  $("termWrap").hidden=false;initTerm();term.reset();
+  await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+  fit.fit();
   const proto=(location.protocol==="https:")?"wss":"ws";
   const url=proto+"://"+location.host+P+"/ssh/ws?id="+encodeURIComponent(j.id)+"&cols="+term.cols+"&rows="+term.rows;
   ws=new WebSocket(url);ws.binaryType="arraybuffer";
-  ws.onopen=()=>{$("sDisc").hidden=false;$("sGo").disabled=true;$("sGo").textContent="已连接";$("sPass").value="";msg("已连接 "+user+"@"+host);fit.fit();quick(true);startKA();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
+  ws.onopen=()=>{$("sDisc").hidden=false;$("sGo").disabled=true;$("sGo").textContent="已连接";$("sPass").value="";msg("已连接 "+user+"@"+host);fit.fit();quick(true);$("cAll").disabled=false;$("cSel").disabled=true;startKA();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
   ws.onmessage=e=>{if(typeof e.data==="string"){term.write(e.data)}else{term.write(new Uint8Array(e.data))}};
   ws.onerror=()=>{msg("连接出错","bad")};
   ws.onclose=()=>{ws=null;stopKA();quick(false);$("sDisc").hidden=true;$("sGo").disabled=false;$("sGo").textContent="连接";msg("已断开");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
  }catch(x){msg("连接失败："+x.message,"bad");quick(false);$("sGo").disabled=false;$("sGo").textContent="连接"}
 };
+$("cSel").onclick=()=>copyText(term&&term.getSelection());
+$("cAll").onclick=()=>copyText(allText());
 $("qIp").onclick=()=>sendCmd("bash <(curl -sL IP.Check.Place)");
 $("qTq").onclick=()=>sendCmd("bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)");
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){};try{fit.fit()}catch(e){};term.focus()}});
