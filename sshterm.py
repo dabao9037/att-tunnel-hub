@@ -124,6 +124,8 @@ class Session:
     def append(self, data):
         if not data:
             return
+        if isinstance(data, str):
+            data = data.encode('utf-8', 'replace')
         with self.lock:
             self.buf += data
             if len(self.buf) > MAX_BUF:
