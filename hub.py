@@ -997,18 +997,24 @@ body.term-mode{overflow:hidden}
 <main class="content">
 <div class="card" style="padding:18px">
 <form id="fSsh" autocomplete="off">
+<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px">
+<div style="flex:1"><label for="sSaved">已保存的服务器</label><select id="sSaved"><option value="">选择已保存的服务器…</option></select></div>
+<button class="btn s d" id="sDel" type="button" style="margin-bottom:1px">删除</button>
+</div>
 <div class="sshform">
 <div><label for="sHost">服务器 IP / 域名</label><input id="sHost" required placeholder="1.2.3.4" autocomplete="off"></div>
 <div><label for="sPort">端口</label><input id="sPort" value="22" inputmode="numeric" pattern="[0-9]{1,5}"></div>
 <div><label for="sUser">用户名</label><input id="sUser" value="root" autocomplete="off"></div>
 </div>
-<label for="sPass">密码（只用于本次连接，不保存）</label><input id="sPass" type="password" required autocomplete="new-password">
+<label for="sPass">密码（勾选“记住”后保存在本浏览器）</label><input id="sPass" type="password" required autocomplete="new-password">
+<label style="display:flex;align-items:center;gap:8px;color:var(--mut);font-size:13px;margin-top:8px"><input type="checkbox" id="sRemember" checked style="width:auto"> 记住这台服务器（密码只保存在本浏览器）</label>
 <div class="acts" style="margin-top:12px">
 <button class="btn p" id="sGo" type="submit">连接</button>
+<button class="btn" id="sResume" type="button" hidden>继续上次会话</button>
 <span id="sMsg" class="mut" style="font-size:13px;align-self:center"></span>
 </div>
 </form>
-<p class="mut" style="font-size:12.5px;margin:12px 0 0">连接后进入全屏终端：上下滑动只在终端里滚动，不会带动网页；点「选择文本」可以用原生选择/复制。主机指纹首次连接自动接受，面板不保存 SSH 密码。</p>
+<p class="mut" style="font-size:12.5px;margin:12px 0 0">连接后进入全屏终端：上下滑动只在终端里滚动，不会带动网页；点「选择文本」可以用原生选择/复制。主机指纹首次连接自动接受；服务器不保存密码，勾选「记住」时密码只存在本浏览器 localStorage。</p>
 </div>
 </main></div></div>
 <div id="termScreen" class="termscreen" hidden>
@@ -1046,7 +1052,17 @@ function fallbackCopy(t){const a=document.createElement("textarea");a.value=t;do
 function copyText(t){if(!t){tmsg("没有可复制的内容","bad");return}
  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(()=>tmsg("已复制 "+t.length+" 字符"),()=>fallbackCopy(t))}else{fallbackCopy(t)}}
 function allText(){if(!term)return "";const b=term.buffer.active;const a=[];for(let i=0;i<b.length;i++){const l=b.getLine(i);if(l)a.push(l.translateToString(true))}return a.join("\n").replace(/\s+$/,"")}
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+const SKEY="ipcare-ssh-saved",LKEY="ipcare-ssh-last",RKEY="ipcare-ssh-resume";
+function loadSaved(){try{return JSON.parse(localStorage.getItem(SKEY)||"[]")}catch(e){return []}}
+function storeSaved(a){try{localStorage.setItem(SKEY,JSON.stringify(a))}catch(e){}}
+function renderSaved(){const a=loadSaved(),sel=$("sSaved");sel.innerHTML='<option value="">选择已保存的服务器…</option>'+a.map((x,i)=>'<option value="'+i+'">'+esc(x.name||x.host)+' ('+esc(x.user)+'@'+esc(x.host)+':'+esc(x.port)+')</option>').join("");const last=localStorage.getItem(LKEY)||"";const idx=a.findIndex(x=>x.host+"|"+x.port+"|"+x.user===last);if(idx>=0)sel.value=String(idx)}
+function fillRecord(x){if(!x)return;$("sHost").value=x.host||"";$("sPort").value=x.port||"22";$("sUser").value=x.user||"root";$("sPass").value=x.password||"";lastHost=x.host||"";lastPort=String(x.port||"22");lastUser=x.user||"root";lastPass=x.password||""}
+function saveRecord(rec){const a=loadSaved(),key=rec.host+"|"+rec.port+"|"+rec.user;const i=a.findIndex(x=>x.host+"|"+x.port+"|"+x.user===key);if(i>=0)a[i]=rec;else a.push(rec);storeSaved(a);localStorage.setItem(LKEY,key);renderSaved();const j=a.findIndex(x=>x.host+"|"+x.port+"|"+x.user===key);if(j>=0)$("sSaved").value=String(j)}
+function deleteRecord(){const a=loadSaved(),v=$("sSaved").value;if(v===""||!a[v]){msg("先选择一个已保存的服务器","bad");return}if(!confirm("删除记录 "+a[v].host+"？"))return;a.splice(v,1);storeSaved(a);renderSaved();$("sSaved").value="";msg("已删除")}
 let ws=null,term=null,fit=null,ka=null;
+let sid=null,received=0,stopped=false,retry=0,retryTimer=null,reconnectTries=0,connecting=false,hiddenAt=0;
+let lastHost="",lastPort="22",lastUser="root",lastPass="";
 function startKA(){stopKA();ka=setInterval(()=>{if(ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){}}},20000)}
 function stopKA(){if(ka){clearInterval(ka);ka=null}}
 function quick(on){["qIp","qTq"].forEach(id=>{const b=$(id);if(b)b.disabled=!on})}
@@ -1061,29 +1077,44 @@ function initTerm(){
  term.attachCustomKeyEventHandler(e=>{if(e.type==="keydown"&&(e.ctrlKey||e.metaKey)&&(e.key==="c"||e.key==="C")&&term.hasSelection()){copyText(term.getSelection());return false}return true});
  window.addEventListener("resize",()=>{if(term){try{fit.fit()}catch(e){}}});
 }
-function closeTerm(){$("textScreen").hidden=true;$("termScreen").hidden=true;document.body.classList.remove("term-mode");$("sGo").disabled=false;$("sGo").textContent="连接";$("sDisc").textContent="断开";msg("已断开")}
+function closeTerm(){$("textScreen").hidden=true;$("termScreen").hidden=true;document.body.classList.remove("term-mode");$("sGo").disabled=false;$("sGo").textContent="连接";$("sDisc").textContent="断开";msg("已断开");connecting=false}
+function saveResume(){if(!sid)return;try{sessionStorage.setItem(RKEY,JSON.stringify({id:sid,host:lastHost,user:lastUser,port:lastPort}))}catch(e){}}
+function loadResume(){try{return JSON.parse(sessionStorage.getItem(RKEY)||"null")}catch(e){return null}}
+function scheduleReconnect(){if(stopped||!sid)return;clearTimeout(retryTimer);const d=Math.min(1000*Math.pow(2,Math.min(retry,4)),15000);retry++;retryTimer=setTimeout(()=>{if(!stopped&&sid)openSocket(true)},d)}
+function reconnectNew(){if(stopped)return;if(!lastPass){tmsg("会话已过期，请重新连接","bad");$("sDisc").textContent="返回";stopped=true;return}tmsg("旧会话已过期，正在重新连接…");post("/api/ssh/connect",{host:lastHost,port:lastPort,user:lastUser,password:lastPass}).then(j=>{if(stopped)return;sid=j.id;received=0;reconnectTries=0;retry=0;term.reset();term.write("\r\n\x1b[33m[旧会话已过期，已重新连接]\x1b[0m\r\n");openSocket(false)}).catch(e=>{tmsg("重新连接失败："+e.message,"bad");$("sDisc").textContent="返回";stopped=true})}
+function openSocket(resume){
+ if(!sid||stopped)return;
+ if(ws){try{ws.onclose=null;ws.close()}catch(e){}ws=null}
+ const proto=(location.protocol==="https:")?"wss":"ws";
+ const url=proto+"://"+location.host+P+"/ssh/ws?id="+encodeURIComponent(sid)+"&offset="+(resume?received:0)+"&cols="+term.cols+"&rows="+term.rows;
+ const sock=new WebSocket(url);ws=sock;sock.binaryType="arraybuffer";
+ sock.onopen=()=>{if(ws!==sock)return;retry=0;reconnectTries=0;clearTimeout(retryTimer);$("sDisc").textContent="断开";quick(true);$("cAll").disabled=false;$("cText").disabled=false;$("cSel").disabled=true;tmsg(resume?"已重新连接（同一个会话）":("已连接 "+lastUser+"@"+lastHost));fit.fit();startKA();sock.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus();saveResume()};
+ sock.onmessage=e=>{if(ws!==sock)return;if(typeof e.data==="string"){term.write(e.data)}else{const b=new Uint8Array(e.data);received+=b.length;term.write(b)}};
+ sock.onerror=()=>{};
+ sock.onclose=()=>{if(ws!==sock)return;ws=null;stopKA();quick(false);if(stopped)return;if(!sid){tmsg("已断开","bad");return}reconnectTries++;if(reconnectTries>=4&&lastPass){reconnectNew();return}tmsg("连接中断，正在重连…","bad");scheduleReconnect()};
+}
 $("fSsh").onsubmit=async ev=>{
  ev.preventDefault();
- if(ws)return;
+ if(ws||connecting)return;
  const host=$("sHost").value.trim(),port=$("sPort").value.trim()||"22",user=$("sUser").value.trim()||"root",pass=$("sPass").value;
  if(!host||!pass){msg("请填 IP 和密码","bad");return}
- $("sGo").disabled=true;$("sGo").textContent="连接中…";msg("正在建立 SSH 会话…");
+ connecting=true;$("sGo").disabled=true;$("sGo").textContent="连接中…";msg("正在建立 SSH 会话…");
+ stopped=false;clearTimeout(retryTimer);retry=0;reconnectTries=0;
+ lastHost=host;lastPort=port;lastUser=user;lastPass=pass;
  try{
   const j=await post("/api/ssh/connect",{host,port,user,password:pass});
+  sid=j.id;received=0;
   $("termHost").textContent=user+"@"+host;$("termScreen").hidden=false;document.body.classList.add("term-mode");
   initTerm();term.reset();
   await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-  fit.fit();
-  const proto=(location.protocol==="https:")?"wss":"ws";
-  const url=proto+"://"+location.host+P+"/ssh/ws?id="+encodeURIComponent(j.id)+"&cols="+term.cols+"&rows="+term.rows;
-  ws=new WebSocket(url);ws.binaryType="arraybuffer";
-  ws.onopen=()=>{$("sDisc").textContent="断开";quick(true);$("cAll").disabled=false;$("cText").disabled=false;$("cSel").disabled=true;$("sPass").value="";tmsg("已连接 "+user+"@"+host);fit.fit();startKA();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
-  ws.onmessage=e=>{if(typeof e.data==="string"){term.write(e.data)}else{term.write(new Uint8Array(e.data))}};
-  ws.onerror=()=>tmsg("连接出错","bad");
-  ws.onclose=()=>{ws=null;stopKA();quick(false);$("cAll").disabled=false;$("cText").disabled=false;$("cSel").disabled=true;$("sDisc").textContent="返回";tmsg("已断开","bad");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
- }catch(x){msg("连接失败："+x.message,"bad");$("termScreen").hidden=true;document.body.classList.remove("term-mode");$("sGo").disabled=false;$("sGo").textContent="连接"}
+  fit.fit();openSocket(false);saveResume();
+  if($("sRemember").checked)saveRecord({name:host,host:host,port:port,user:user,password:pass});else $("sPass").value="";
+ }catch(x){msg("连接失败："+x.message,"bad");$("termScreen").hidden=true;document.body.classList.remove("term-mode");$("sGo").disabled=false;$("sGo").textContent="连接";connecting=false}
 };
-$("sDisc").onclick=()=>{if(ws){try{ws.close()}catch(e){}}ws=null;closeTerm()};
+$("sSaved").onchange=()=>{const a=loadSaved(),v=$("sSaved").value;if(v!=="")fillRecord(a[+v])};
+$("sDel").onclick=deleteRecord;
+$("sResume").onclick=()=>{const r=loadResume();if(!r)return;sid=r.id;received=0;stopped=false;reconnectTries=0;retry=0;lastHost=r.host||"";lastPort=r.port||"22";lastUser=r.user||"root";const rec=loadSaved().find(x=>x.host===lastHost&&String(x.port)===String(lastPort)&&x.user===lastUser);lastPass=rec?rec.password||"":"";$("termHost").textContent=lastUser+"@"+lastHost;$("sHost").value=lastHost;$("sPort").value=lastPort;$("sUser").value=lastUser;$("termScreen").hidden=false;document.body.classList.add("term-mode");initTerm();term.reset();requestAnimationFrame(()=>requestAnimationFrame(()=>{fit.fit();openSocket(true)}))};
+$("sDisc").onclick=()=>{stopped=true;clearTimeout(retryTimer);stopKA();if(ws){try{ws.send(JSON.stringify({t:"bye"}))}catch(e){};try{ws.close()}catch(e){};ws=null}sid=null;received=0;sessionStorage.removeItem(RKEY);$("sResume").hidden=true;closeTerm()};
 $("cSel").onclick=()=>copyText(term&&term.getSelection());
 $("cAll").onclick=()=>copyText(allText());
 $("cText").onclick=()=>{$("selText").value=allText();$("textScreen").hidden=false;setTimeout(()=>{const a=$("selText");a.focus();a.scrollTop=a.scrollHeight},50)};
@@ -1092,8 +1123,15 @@ $("tCopy").onclick=()=>{const a=$("selText");const s=a.value.substring(a.selecti
 $("tClose").onclick=()=>{$("textScreen").hidden=true;if(term)term.focus()};
 $("qIp").onclick=()=>sendCmd("bash <(curl -sL IP.Check.Place)");
 $("qTq").onclick=()=>sendCmd("bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)");
-document.addEventListener("visibilitychange",()=>{if(!document.hidden&&ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){};try{fit.fit()}catch(e){};term.focus()}});
-window.addEventListener("beforeunload",()=>{stopKA();if(ws)ws.close()});
+document.addEventListener("visibilitychange",()=>{if(document.hidden){hiddenAt=Date.now();saveResume();return}if(stopped||!sid)return;if(hiddenAt&&Date.now()-hiddenAt>8000){try{ws&&ws.close()}catch(e){}ws=null;retry=0;openSocket(true);return}if(!ws||ws.readyState!==1){retry=0;clearTimeout(retryTimer);openSocket(true)}else{try{ws.send(JSON.stringify({t:"p"}))}catch(e){};try{fit.fit()}catch(e){};term.focus()}});
+window.addEventListener("online",()=>{if(!stopped&&sid&&(!ws||ws.readyState!==1)){retry=0;openSocket(true)}});
+window.addEventListener("beforeunload",()=>{saveResume();stopKA();if(ws){try{ws.send(JSON.stringify({t:"unload"}))}catch(e){};ws.close()}});
+setInterval(()=>{if(ws&&ws.readyState===1)saveResume()},5000);
+renderSaved();
+const __saved=loadSaved();
+if(__saved.length){const v=$("sSaved").value;fillRecord(v!==""?__saved[+v]:__saved[0])}
+const __resume=loadResume();if(__resume){$("sResume").hidden=false;msg("有上次未结束的会话，可点「继续上次会话」")}
+
 </script></body></html>
 '''
 

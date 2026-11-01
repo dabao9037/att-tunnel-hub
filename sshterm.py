@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal WebSocket-backed SSH terminal for att-tunnel-hub.
+"""WebSocket-backed SSH terminal for att-tunnel-hub.
 
-No third-party packages: stdlib WebSocket framing + system ssh/sshpass + pty.
-Passwords live only in a short-lived in-memory map and a 0600 temp file.
+The SSH PTY is kept on the panel machine for a grace period after the browser
+WebSocket drops (background tab, phone lock, network change). A page can
+reattach to the same shell with `?id=<session>&offset=<bytes already received>`
+and the server replays the missed output. No third-party packages.
+
+Passwords stay in memory only (and a 0600 temp file used by sshpass); they are
+removed when the session is closed.
 """
 import base64
 import fcntl
@@ -12,42 +17,25 @@ import json
 import os
 import pty
 import secrets
-import shutil
 import signal
 import struct
 import tempfile
 import termios
 import threading
-import urllib.parse
 import time
+import urllib.parse
 
 GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
-PENDING_TTL = 120
-_LOCK = threading.Lock()
-_PENDING = {}
+PENDING_TTL = 120          # an unspawned session must be attached within this
+DETACH_TTL = 600           # keep a detached SSH shell for 10 minutes
+CLOSED_TTL = 60
+MAX_BUF = 4 * 1024 * 1024
+MAX_SESSIONS = 30
+_LOCK = threading.RLock()
+_SESSIONS = {}
 
 
-def new_session(host, port, user, password):
-    """Create a one-time ticket for the WebSocket; credentials stay in memory."""
-    sid = secrets.token_urlsafe(18)
-    now = time.time()
-    with _LOCK:
-        for k in [k for k, v in _PENDING.items() if v['exp'] < now]:
-            _PENDING.pop(k, None)
-        _PENDING[sid] = {'host': host, 'port': int(port), 'user': user,
-                         'password': password, 'exp': now + PENDING_TTL}
-    return sid
-
-
-def pop_session(sid):
-    with _LOCK:
-        d = _PENDING.pop(sid, None)
-    if not d or d['exp'] < time.time():
-        return None
-    return d
-
-
-# ---------------------------------------------------------------- WebSocket
+# ---------------------------------------------------------------- frame helpers
 def _read_exact(f, n):
     b = f.read(n)
     if len(b) < n:
@@ -106,16 +94,267 @@ def _which(name):
     return ''
 
 
+# ---------------------------------------------------------------- session
+class Session:
+    def __init__(self, sid, host, port, user, password):
+        self.id = sid
+        self.host = host
+        self.port = int(port)
+        self.user = user
+        self.password = password
+        self.lock = threading.RLock()
+        self.conn = None
+        self.wlock = None
+        self.fd = None
+        self.pid = None
+        self.tmpdir = ''
+        self.buf = bytearray()
+        self.dropped = 0
+        self.spawned = False
+        self.closed = False
+        self.created = time.time()
+        self.detached = time.time()
+        self.rows = 24
+        self.cols = 80
+
+    def total(self):
+        with self.lock:
+            return self.dropped + len(self.buf)
+
+    def append(self, data):
+        if not data:
+            return
+        with self.lock:
+            self.buf += data
+            if len(self.buf) > MAX_BUF:
+                drop = len(self.buf) - MAX_BUF
+                del self.buf[:drop]
+                self.dropped += drop
+            conn, wl = self.conn, self.wlock
+        if conn is not None:
+            try:
+                _send_frame(conn, wl, 0x2, data)
+            except Exception:
+                self.detach()
+
+    def attach(self, conn, wlock, offset):
+        old, old_wl = None, None
+        with self.lock:
+            old, old_wl = self.conn, self.wlock
+            self.conn, self.wlock = conn, wlock
+            total = self.dropped + len(self.buf)
+            start = offset if 0 <= offset <= total else 0
+            pos = max(0, start - self.dropped)
+            data = bytes(self.buf[pos:])
+            if data:
+                try:
+                    _send_frame(conn, wlock, 0x2, data)
+                except Exception:
+                    self.conn = None
+                    self.wlock = None
+        if old is not None and old is not conn:
+            try:
+                _send_frame(old, old_wl, 0x8, b'')
+            except Exception:
+                pass
+
+    def detach(self, conn=None):
+        with self.lock:
+            if conn is not None and self.conn is not conn:
+                return
+            self.conn = None
+            self.wlock = None
+            self.detached = time.time()
+
+    def spawn(self, rows, cols):
+        with self.lock:
+            if self.spawned:
+                self._resize(rows, cols)
+                return True
+            self.spawned = True
+            self.rows, self.cols = rows, cols
+        ssh = _which('ssh')
+        sshpass = _which('sshpass')
+        if not ssh or not sshpass:
+            self.append('\r\n\x1b[31m[面板机缺少 ssh 或 sshpass，无法建立 SSH 连接]\x1b[0m\r\n')
+            self.closed = True
+            return False
+        try:
+            self.tmpdir = tempfile.mkdtemp(prefix='att-ssh-')
+            pwfile = os.path.join(self.tmpdir, 'pw')
+            known = os.path.join(self.tmpdir, 'known_hosts')
+            with open(pwfile, 'w') as f:
+                f.write(self.password)
+            os.chmod(pwfile, 0o600)
+            env = dict(os.environ, TERM='xterm-256color', LANG='C.UTF-8', LC_ALL='C.UTF-8')
+            args = [sshpass, '-f', pwfile, ssh, '-tt',
+                    '-p', str(self.port),
+                    '-o', 'StrictHostKeyChecking=accept-new',
+                    '-o', 'UserKnownHostsFile=' + known,
+                    '-o', 'ConnectTimeout=15',
+                    '-o', 'ServerAliveInterval=30',
+                    '-o', 'ServerAliveCountMax=4',
+                    '-o', 'NumberOfPasswordPrompts=1',
+                    '-o', 'PubkeyAuthentication=no',
+                    '-o', 'PreferredAuthentications=password,keyboard-interactive',
+                    '-o', 'LogLevel=ERROR',
+                    '%s@%s' % (self.user, self.host)]
+            pid, fd = pty.fork()
+            if pid == 0:
+                try:
+                    os.closerange(3, 256)
+                    os.execvpe(sshpass, args, env)
+                except Exception:
+                    os._exit(127)
+            with self.lock:
+                self.pid, self.fd = pid, fd
+            _winsize(fd, rows, cols)
+            threading.Thread(target=self._reader, daemon=True).start()
+            return True
+        except Exception as e:
+            self.append('\r\n\x1b[31m[SSH 连接失败：%s]\x1b[0m\r\n' % str(e)[:200])
+            self.closed = True
+            return False
+
+    def _resize(self, rows, cols):
+        with self.lock:
+            fd = self.fd
+        if fd is not None:
+            _winsize(fd, rows, cols)
+
+    def _reader(self):
+        fd = self.fd
+        while True:
+            try:
+                data = os.read(fd, 8192)
+            except OSError:
+                break
+            if not data:
+                break
+            self.append(data)
+        with self.lock:
+            self.closed = True
+            conn, wl = self.conn, self.wlock
+        self.append('\r\n\x1b[33m[SSH 会话已结束]\x1b[0m\r\n')
+        if conn is not None:
+            try:
+                _send_frame(conn, wl, 0x8, b'')
+            except Exception:
+                pass
+
+    def write(self, data):
+        with self.lock:
+            fd = self.fd
+            closed = self.closed
+        if fd is not None and not closed and data:
+            try:
+                os.write(fd, data)
+            except OSError:
+                pass
+
+    def close(self):
+        with self.lock:
+            if self.closed and self.fd is None and self.pid is None:
+                pass
+            self.closed = True
+            fd, pid = self.fd, self.pid
+            self.fd = self.pid = None
+            conn, wl = self.conn, self.wlock
+            self.conn = self.wlock = None
+            tmpdir = self.tmpdir
+            self.tmpdir = ''
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+        if conn is not None:
+            try:
+                _send_frame(conn, wl, 0x8, b'')
+            except Exception:
+                pass
+        if tmpdir:
+            for name in ('pw', 'known_hosts'):
+                try:
+                    os.remove(os.path.join(tmpdir, name))
+                except OSError:
+                    pass
+            try:
+                os.rmdir(tmpdir)
+            except OSError:
+                pass
+        with _LOCK:
+            _SESSIONS.pop(self.id, None)
+
+
+def _reap():
+    while True:
+        time.sleep(30)
+        now = time.time()
+        for s in list(_SESSIONS.values()):
+            with s.lock:
+                attached = s.conn is not None
+                spawned = s.spawned
+                closed = s.closed
+                detached = s.detached
+                created = s.created
+            try:
+                if not spawned and now - created > PENDING_TTL:
+                    s.close()
+                elif spawned and not attached and now - detached > DETACH_TTL:
+                    s.close()
+                elif closed and not attached and now - detached > CLOSED_TTL:
+                    s.close()
+            except Exception:
+                pass
+
+
+threading.Thread(target=_reap, daemon=True).start()
+
+
+def new_session(host, port, user, password):
+    sid = secrets.token_urlsafe(18)
+    s = Session(sid, host, port, user, password)
+    with _LOCK:
+        if len(_SESSIONS) >= MAX_SESSIONS:
+            # evict the oldest detached/closed session first
+            candidates = []
+            for x in _SESSIONS.values():
+                with x.lock:
+                    if x.conn is None:
+                        candidates.append((x.detached, x))
+            candidates.sort(key=lambda z: z[0])
+            for _, x in candidates[:max(1, len(candidates))]:
+                x.close()
+                if len(_SESSIONS) < MAX_SESSIONS:
+                    break
+        _SESSIONS[sid] = s
+    return sid
+
+
+def get_session(sid):
+    with _LOCK:
+        return _SESSIONS.get(sid)
+
+
 def handle_ws(handler):
-    """Hijack the HTTP connection and bridge a PTY running ssh."""
     try:
         q = {k: v[0] for k, v in
              urllib.parse.parse_qs(urllib.parse.urlsplit(handler.path).query).items()}
     except Exception:
         q = {}
-    sess = pop_session(q.get('id', ''))
+    sess = get_session(q.get('id', ''))
     if not sess:
-        return handler.send(403, 'SSH 会话不存在或已过期，请重新连接', 'text/plain; charset=utf-8')
+        return handler.send(410, 'SSH 会话不存在或已过期，请重新连接', 'text/plain; charset=utf-8')
     key = handler.headers.get('Sec-WebSocket-Key') or ''
     if not key or (handler.headers.get('Upgrade') or '').lower() != 'websocket':
         return handler.send(400, 'websocket only', 'text/plain')
@@ -127,162 +366,82 @@ def handle_ws(handler):
     handler.end_headers()
     handler.close_connection = True
 
-    ssh = _which('ssh')
-    sshpass = _which('sshpass')
-    conn = handler.connection
-    wlock = threading.Lock()
-
-    def say(text):
-        try:
-            _send_frame(conn, wlock, 0x1, text)
-        except Exception:
-            pass
-
-    if not ssh or not sshpass:
-        say('\r\n\x1b[31m[面板机缺少 ssh 或 sshpass，无法建立 SSH 连接]\x1b[0m\r\n')
-        try:
-            _send_frame(conn, wlock, 0x8, b'')
-        except Exception:
-            pass
-        return
-
     rows = q.get('rows', '24')
     cols = q.get('cols', '80')
     try:
         rows, cols = int(rows), int(cols)
     except ValueError:
         rows, cols = 24, 80
-
-    tmpdir = tempfile.mkdtemp(prefix='att-ssh-')
-    pwfile = os.path.join(tmpdir, 'pw')
-    known = os.path.join(tmpdir, 'known_hosts')
     try:
-        with open(pwfile, 'w') as f:
-            f.write(sess['password'])
-        os.chmod(pwfile, 0o600)
-        env = dict(os.environ, TERM='xterm-256color', LANG='C.UTF-8', LC_ALL='C.UTF-8')
-        args = [sshpass, '-f', pwfile, ssh, '-tt',
-                '-p', str(sess['port']),
-                '-o', 'StrictHostKeyChecking=accept-new',
-                '-o', 'UserKnownHostsFile=' + known,
-                '-o', 'ConnectTimeout=15',
-                '-o', 'ServerAliveInterval=30',
-                '-o', 'ServerAliveCountMax=4',
-                '-o', 'NumberOfPasswordPrompts=1',
-                '-o', 'PubkeyAuthentication=no',
-                '-o', 'PreferredAuthentications=password,keyboard-interactive',
-                '-o', 'LogLevel=ERROR',
-                '%s@%s' % (sess['user'], sess['host'])]
-        pid, fd = pty.fork()
-        if pid == 0:
-            try:
-                os.closerange(3, 256)
-                os.execvpe(sshpass, args, env)
-            except Exception:
-                os._exit(127)
-        _winsize(fd, rows, cols)
+        offset = int(q.get('offset', '0'))
+    except ValueError:
+        offset = 0
 
-        stop = threading.Event()
-
-        def reader():
-            while not stop.is_set():
-                try:
-                    data = os.read(fd, 8192)
-                except OSError:
-                    break
-                if not data:
-                    break
-                try:
-                    _send_frame(conn, wlock, 0x2, data)
-                except Exception:
-                    break
-            try:
-                _send_frame(conn, wlock, 0x8, b'')
-            except Exception:
-                pass
-
-        th = threading.Thread(target=reader, daemon=True)
-        th.start()
-
-        def pinger():
-            while not stop.is_set():
-                if stop.wait(25):
-                    break
-                try:
-                    _send_frame(conn, wlock, 0x9, b'')
-                except Exception:
-                    break
-
-        ping_th = threading.Thread(target=pinger, daemon=True)
-        ping_th.start()
-
+    conn = handler.connection
+    wlock = threading.Lock()
+    if not sess.spawn(rows, cols):
         try:
-            pending_op = None
-            pending = b''
-            while True:
-                fin, op, data = _read_frame(handler.rfile)
-                if op == 0x8:
-                    break
-                if op == 0x9:
-                    _send_frame(conn, wlock, 0xA, data)
-                    continue
-                if op == 0xA:
-                    continue
-                if op in (0x1, 0x2):
-                    if not fin:
-                        pending_op = op
-                        pending += data
-                        continue
-                    if pending_op is not None:
-                        data = pending + data
-                        pending_op = None
-                        pending = b''
-                    try:
-                        msg = json.loads(data.decode('utf-8', 'replace'))
-                    except ValueError:
-                        continue
-                    t = msg.get('t')
-                    if t == 'p':
-                        continue
-                    if t == 'i':
-                        d = msg.get('d') or ''
-                        if d:
-                            n = os.write(fd, d.encode('utf-8', 'replace'))
-                    elif t == 'r':
-                        _winsize(fd, msg.get('rows') or rows, msg.get('cols') or cols)
-        except (EOFError, ConnectionResetError, OSError, ValueError):
-            pass
-        finally:
-            stop.set()
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                os.waitpid(pid, 0)
-            except OSError:
-                pass
-            for t in (th, ping_th):
-                try:
-                    t.join(timeout=2)
-                except Exception:
-                    pass
-    except Exception as e:
-        try:
-            say('\r\n\x1b[31m[SSH 连接失败：%s]\x1b[0m\r\n' % str(e)[:200])
+            _send_frame(conn, wlock, 0x8, b'')
         except Exception:
             pass
-    finally:
-        for p in (pwfile, known):
+        return
+    sess.attach(conn, wlock, offset)
+
+    stop = threading.Event()
+
+    def pinger():
+        while not stop.wait(25):
+            with sess.lock:
+                if sess.conn is not conn:
+                    break
             try:
-                os.remove(p)
-            except OSError:
-                pass
+                _send_frame(conn, wlock, 0x9, b'')
+            except Exception:
+                break
+
+    ping_th = threading.Thread(target=pinger, daemon=True)
+    ping_th.start()
+    try:
+        pending_op = None
+        pending = b''
+        while True:
+            fin, op, data = _read_frame(handler.rfile)
+            if op == 0x8:
+                break
+            if op == 0x9:
+                _send_frame(conn, wlock, 0xA, data)
+                continue
+            if op == 0xA:
+                continue
+            if op in (0x1, 0x2):
+                if not fin:
+                    pending_op = op
+                    pending += data
+                    continue
+                if pending_op is not None:
+                    data = pending + data
+                    pending_op = None
+                    pending = b''
+                try:
+                    msg = json.loads(data.decode('utf-8', 'replace'))
+                except ValueError:
+                    continue
+                t = msg.get('t')
+                if t == 'p':
+                    continue
+                if t == 'bye':
+                    sess.close()
+                    break
+                if t == 'i':
+                    sess.write((msg.get('d') or '').encode('utf-8', 'replace'))
+                elif t == 'r':
+                    sess._resize(msg.get('rows') or rows, msg.get('cols') or cols)
+    except (EOFError, ConnectionResetError, OSError, ValueError):
+        pass
+    finally:
+        stop.set()
+        sess.detach(conn)
         try:
-            os.rmdir(tmpdir)
-        except OSError:
+            ping_th.join(timeout=2)
+        except Exception:
             pass
