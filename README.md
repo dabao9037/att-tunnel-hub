@@ -62,6 +62,7 @@ curl -L .../install.sh -o ./install.sh && chmod +x ./install.sh && ./install.sh 
   - 会话保活：服务端每 25 秒发 WebSocket ping，前端每 20 秒发保活；切后台/切标签页回来会重新适配终端。
   - 快捷输入：内置「IP 检测」（`bash <(curl -sL IP.Check.Place)`）和「TQ」（`bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)`）两个按钮，点一下直接执行。
   - 终端会在连接前按容器尺寸自适应；手机/窄屏自动换行，不再左右裁切。提供「复制选中」「复制全部」按钮，Ctrl/Cmd+C 复制选中内容。
+  - 连接后进入全屏终端（参考 NodeLite 的终端页）：上下滑动只在终端内滚动，不带动网页；点「选择文本」打开原生可选择文本层，手机可长按选择/复制。
 
 ## 管理命令
 

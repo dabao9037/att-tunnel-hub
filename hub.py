@@ -955,14 +955,28 @@ load();setInterval(load,30000);
 
 
 PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark">
 <title>在线 SSH · att-tunnel-hub</title><style>{CSS}</style>
 <link rel="stylesheet" href="{P}/static/xterm.css">
 <style>
 .sshform{display:grid;grid-template-columns:minmax(200px,2fr) 90px minmax(120px,1fr);gap:10px}
 @media(max-width:760px){.sshform{grid-template-columns:1fr}}
-.termwrap{height:62vh;min-height:380px;background:#0b1120;border:1px solid var(--line);border-radius:12px;padding:8px;margin-top:14px;overflow:hidden}
+.termscreen{position:fixed;inset:0;z-index:100;background:#0b1020;display:flex;flex-direction:column}
+.termscreen[hidden],.textscreen[hidden]{display:none!important}
+.termbar{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:#0f172a;border-bottom:1px solid #1e293b;color:#e5e7eb;flex-wrap:wrap}
+.termtitle{display:flex;align-items:center;gap:10px;min-width:0}
+.termtitle b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.termtitle span{font-size:12px;color:#94a3b8;white-space:nowrap}
+.termacts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.termbar .btn{background:#1e293b;color:#e5e7eb;border-color:#334155;padding:5px 9px;font-size:12px;border-radius:8px}
+.termbar .btn:hover{border-color:#60a5fa}
+.termwrap{flex:1;min-height:0;background:#0b1020;padding:6px;overflow:hidden;touch-action:none;overscroll-behavior:contain}
 #term{height:100%}#term .xterm{height:100%}
+#term .xterm-viewport{overscroll-behavior:contain;touch-action:none}
+.textscreen{position:fixed;inset:0;z-index:110;background:#0b1020;display:flex;flex-direction:column;color:#e5e7eb}
+#selText{flex:1;width:100%;margin:0;padding:12px;border:0;outline:none;background:#0f172a;color:#e5e7eb;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:none;white-space:pre;overflow:auto;-webkit-user-select:text;user-select:text}
+body.term-mode{overflow:hidden}
+@media(max-width:600px){.termbar{padding:6px 8px}.termbar b{font-size:13px}.termbar .btn{padding:4px 7px;font-size:11px}.termacts{gap:4px}}
 </style></head>
 <body><div class="app">
 <aside class="sidebar">
@@ -991,22 +1005,32 @@ PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <label for="sPass">密码（只用于本次连接，不保存）</label><input id="sPass" type="password" required autocomplete="new-password">
 <div class="acts" style="margin-top:12px">
 <button class="btn p" id="sGo" type="submit">连接</button>
-<button class="btn" id="sDisc" type="button" hidden>断开</button>
 <span id="sMsg" class="mut" style="font-size:13px;align-self:center"></span>
 </div>
 </form>
-<div class="acts" style="margin-top:10px">
-<span class="mut" style="font-size:13px;align-self:center">快捷输入：</span>
-<button class="btn s" id="qIp" type="button" disabled title="bash <(curl -sL IP.Check.Place)">IP 检测</button>
-<button class="btn s" id="qTq" type="button" disabled title="bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)">TQ</button>
-<span style="width:8px"></span>
-<button class="btn s" id="cSel" type="button" disabled>复制选中</button>
-<button class="btn s" id="cAll" type="button" disabled>复制全部</button>
-</div>
-<div id="termWrap" class="termwrap" hidden><div id="term"></div></div>
-<p class="mut" style="font-size:12.5px;margin:12px 0 0">主机指纹首次连接会自动接受并记录在临时目录；面板不保存 SSH 密码，关闭页面即断开。只提供终端，不支持上传/下载。</p>
+<p class="mut" style="font-size:12.5px;margin:12px 0 0">连接后进入全屏终端：上下滑动只在终端里滚动，不会带动网页；点「选择文本」可以用原生选择/复制。主机指纹首次连接自动接受，面板不保存 SSH 密码。</p>
 </div>
 </main></div></div>
+<div id="termScreen" class="termscreen" hidden>
+<div class="termbar"><div class="termtitle"><b id="termHost">SSH</b><span id="termMsg">连接中…</span></div>
+<div class="termacts">
+<button class="btn s" id="qIp" type="button" disabled title="bash <(curl -sL IP.Check.Place)">IP 检测</button>
+<button class="btn s" id="qTq" type="button" disabled title="bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)">TQ</button>
+<button class="btn s" id="cSel" type="button" disabled>复制选中</button>
+<button class="btn s" id="cAll" type="button" disabled>复制全部</button>
+<button class="btn s" id="cText" type="button" disabled>选择文本</button>
+<button class="btn s" id="sDisc" type="button">断开</button>
+</div></div>
+<div id="termWrap" class="termwrap"><div id="term"></div></div>
+</div>
+<div id="textScreen" class="textscreen" hidden>
+<div class="termbar"><b>选择文本</b><div class="termacts">
+<button class="btn s" id="tAll" type="button">全选</button>
+<button class="btn s" id="tCopy" type="button">复制选中</button>
+<button class="btn s" id="tClose" type="button">关闭</button>
+</div></div>
+<textarea id="selText" readonly spellcheck="false"></textarea>
+</div>
 <div id="toasts" aria-live="polite"></div>
 <script src="{P}/static/xterm.js"></script>
 <script src="{P}/static/addon-fit.js"></script>
@@ -1014,28 +1038,30 @@ PAGE_SSH = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 const P="{P}",C="{C}";
 const $=s=>document.getElementById(s);
 function msg(t,k){const e=$("sMsg");e.textContent=t;e.className=(k==="bad")?"err":"mut";}
+function tmsg(t,k){const e=$("termMsg");e.textContent=t;e.className=(k==="bad")?"err":"mut";}
 async function post(u,b){const r=await fetch(P+u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRF-Token":C},body:new URLSearchParams(b||{})});
 if(r.status===401){location.href=P+"/";throw new Error("登录已过期")}let j={};try{j=await r.json()}catch(e){}
 if(!r.ok||!j.ok)throw new Error(j.error||("HTTP "+r.status));return j}
+function fallbackCopy(t){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();try{document.execCommand("copy");tmsg("已复制 "+t.length+" 字符")}catch(e){tmsg("复制失败，请手动选择","bad")}a.remove()}
+function copyText(t){if(!t){tmsg("没有可复制的内容","bad");return}
+ if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(()=>tmsg("已复制 "+t.length+" 字符"),()=>fallbackCopy(t))}else{fallbackCopy(t)}}
+function allText(){if(!term)return "";const b=term.buffer.active;const a=[];for(let i=0;i<b.length;i++){const l=b.getLine(i);if(l)a.push(l.translateToString(true))}return a.join("\n").replace(/\s+$/,"")}
 let ws=null,term=null,fit=null,ka=null;
 function startKA(){stopKA();ka=setInterval(()=>{if(ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){}}},20000)}
 function stopKA(){if(ka){clearInterval(ka);ka=null}}
 function quick(on){["qIp","qTq"].forEach(id=>{const b=$(id);if(b)b.disabled=!on})}
 function sendCmd(cmd){if(ws&&ws.readyState===1){ws.send(JSON.stringify({t:"i",d:cmd+"\n"}));term.focus()}}
-function copyText(t){if(!t){msg("没有可复制的内容","bad");return}
- if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(()=>msg("已复制 "+t.length+" 字符"),()=>fallbackCopy(t))}else{fallbackCopy(t)}}
-function fallbackCopy(t){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();try{document.execCommand("copy");msg("已复制 "+t.length+" 字符")}catch(e){msg("复制失败，请手动选择","bad")}a.remove()}
-function allText(){if(!term)return "";const b=term.buffer.active;const out=[];for(let i=0;i<b.length;i++){const l=b.getLine(i);if(l)out.push(l.translateToString(true))}return out.join("\n").replace(/\s+$/,"")}
 function initTerm(){
  if(term)return;
- term=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1120',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
- fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open($("term"));try{fit.fit()}catch(e){}
+ term=new Terminal({cursorBlink:true,fontSize:14,fontFamily:'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#93c5fd',selectionBackground:'#334155'},scrollback:5000});
+ fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open($("term"));
  term.onData(d=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"i",d}))});
  term.onResize(({cols,rows})=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"r",cols,rows}))});
  term.onSelectionChange(()=>{if($("cSel"))$("cSel").disabled=!term.hasSelection()});
  term.attachCustomKeyEventHandler(e=>{if(e.type==="keydown"&&(e.ctrlKey||e.metaKey)&&(e.key==="c"||e.key==="C")&&term.hasSelection()){copyText(term.getSelection());return false}return true});
  window.addEventListener("resize",()=>{if(term){try{fit.fit()}catch(e){}}});
 }
+function closeTerm(){$("textScreen").hidden=true;$("termScreen").hidden=true;document.body.classList.remove("term-mode");$("sGo").disabled=false;$("sGo").textContent="连接";$("sDisc").textContent="断开";msg("已断开")}
 $("fSsh").onsubmit=async ev=>{
  ev.preventDefault();
  if(ws)return;
@@ -1044,26 +1070,32 @@ $("fSsh").onsubmit=async ev=>{
  $("sGo").disabled=true;$("sGo").textContent="连接中…";msg("正在建立 SSH 会话…");
  try{
   const j=await post("/api/ssh/connect",{host,port,user,password:pass});
-  $("termWrap").hidden=false;initTerm();term.reset();
+  $("termHost").textContent=user+"@"+host;$("termScreen").hidden=false;document.body.classList.add("term-mode");
+  initTerm();term.reset();
   await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
   fit.fit();
   const proto=(location.protocol==="https:")?"wss":"ws";
   const url=proto+"://"+location.host+P+"/ssh/ws?id="+encodeURIComponent(j.id)+"&cols="+term.cols+"&rows="+term.rows;
   ws=new WebSocket(url);ws.binaryType="arraybuffer";
-  ws.onopen=()=>{$("sDisc").hidden=false;$("sGo").disabled=true;$("sGo").textContent="已连接";$("sPass").value="";msg("已连接 "+user+"@"+host);fit.fit();quick(true);$("cAll").disabled=false;$("cSel").disabled=true;startKA();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
+  ws.onopen=()=>{$("sDisc").textContent="断开";quick(true);$("cAll").disabled=false;$("cText").disabled=false;$("cSel").disabled=true;$("sPass").value="";tmsg("已连接 "+user+"@"+host);fit.fit();startKA();ws.send(JSON.stringify({t:"r",cols:term.cols,rows:term.rows}));term.focus()};
   ws.onmessage=e=>{if(typeof e.data==="string"){term.write(e.data)}else{term.write(new Uint8Array(e.data))}};
-  ws.onerror=()=>{msg("连接出错","bad")};
-  ws.onclose=()=>{ws=null;stopKA();quick(false);$("sDisc").hidden=true;$("sGo").disabled=false;$("sGo").textContent="连接";msg("已断开");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
- }catch(x){msg("连接失败："+x.message,"bad");quick(false);$("sGo").disabled=false;$("sGo").textContent="连接"}
+  ws.onerror=()=>tmsg("连接出错","bad");
+  ws.onclose=()=>{ws=null;stopKA();quick(false);$("cAll").disabled=false;$("cText").disabled=false;$("cSel").disabled=true;$("sDisc").textContent="返回";tmsg("已断开","bad");term.write("\r\n\x1b[33m[连接已断开]\x1b[0m\r\n")};
+ }catch(x){msg("连接失败："+x.message,"bad");$("termScreen").hidden=true;document.body.classList.remove("term-mode");$("sGo").disabled=false;$("sGo").textContent="连接"}
 };
+$("sDisc").onclick=()=>{if(ws){try{ws.close()}catch(e){}}ws=null;closeTerm()};
 $("cSel").onclick=()=>copyText(term&&term.getSelection());
 $("cAll").onclick=()=>copyText(allText());
+$("cText").onclick=()=>{$("selText").value=allText();$("textScreen").hidden=false;setTimeout(()=>{const a=$("selText");a.focus();a.scrollTop=a.scrollHeight},50)};
+$("tAll").onclick=()=>{const a=$("selText");a.focus();a.select()};
+$("tCopy").onclick=()=>{const a=$("selText");const s=a.value.substring(a.selectionStart,a.selectionEnd);copyText(s||a.value)};
+$("tClose").onclick=()=>{$("textScreen").hidden=true;if(term)term.focus()};
 $("qIp").onclick=()=>sendCmd("bash <(curl -sL IP.Check.Place)");
 $("qTq").onclick=()=>sendCmd("bash <(curl -fsSL https://raw.githubusercontent.com/ibsgss/TcpQuality/main/runTcpQuality.sh)");
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"p"}))}catch(e){};try{fit.fit()}catch(e){};term.focus()}});
-$("sDisc").onclick=()=>{if(ws)ws.close()};
 window.addEventListener("beforeunload",()=>{stopKA();if(ws)ws.close()});
-</script></body></html>'''
+</script></body></html>
+'''
 
 
 # ---------------------------------------------------------------- HTTP
