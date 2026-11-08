@@ -10,7 +10,7 @@
 #       落地机 = att-tunnel B 端，主动外拨连转发机，与节点 1:1。
 set -Eeuo pipefail
 
-VERSION="1.11.3"
+VERSION="1.11.4"
 # att-tunnel 网页面板（--web）和「添加节点可填 SSH 直装出口机」都还在 PR #2 分支上，
 # main 仍是 v2.0.0。先固定到含 SSH 直装和链接二维码 / 订阅的提交；PR #2 合并后改回 main。
 ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/a443516ffe1a85fceb771a3c1ecf4e97067400ef/install.sh}"
@@ -588,6 +588,11 @@ install_forwarder(){
   if [ "$fresh" = 0 ]; then
     ATT_NONINTERACTIVE=1 bash "$att" --tune || warn "TCP 调优（BBR）没成功，不影响使用"
   fi
+
+  # 1a-2. DNS 过滤（SVCB 64 / HTTPS 65）。
+  # 老转发机点「更新」时不会走 --server-a，所以这一步必须放在这里，
+  # 否则只有全新装的机器才会带上，已装的永远补不上。svcb_enable 幂等。
+  svcb_enable || true
 
   # 1b. att-tunnel 装入口端时会在配置模板里写死一个节点 node1（并绑一个空出口）。
   # 这不是面板加的，但结果是“添加转发机就白送一个节点”。默认把它删掉，
