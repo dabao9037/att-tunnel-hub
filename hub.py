@@ -32,7 +32,7 @@ STATEF = os.environ.get('HUB_STATE', '/var/lib/att-hub/state.json')
 SESSION_TTL = 12 * 3600
 POLL_WAIT = 25.0          # agent long-poll 挂起上限
 REQ_TIMEOUT = 360.0       # 普通代理请求上限；升级使用独立后台任务
-UPGRADE_TIMEOUT = 420.0   # 下载60s + 安装330s，仅后台等待
+UPGRADE_TIMEOUT = 660.0   # 下载60s + 安装600s（含 apt 装 dnsmasq），仅后台等待
 UPGRADE_OK_TTL = 300      # 成功后「✓ 更新成功」保留 5 分钟；之后按钮恢复为「更新」
 OFFLINE_AFTER = 45        # 超过这么多秒没 poll 视为离线
 NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
@@ -274,6 +274,24 @@ def finish_upgrade(rec, jid, resp):
 
 def wait_upgrade(rec, job):
     finish_upgrade(rec, job['id'], bus.wait(job, UPGRADE_TIMEOUT))
+
+
+def upgrade_sequence(names):
+    """按顺序逐台更新，一台跑完再下一台，避免 5 台同时重启 att-tunnel。"""
+    for name in names:
+        with lock:
+            rec = state['forwarders'].get(name)
+            if not rec or not fwd_online(rec):
+                log('全部更新：跳过 %s（离线或已删除）' % name)
+                continue
+            job = bus.submit(name, {'method': 'POST', 'path': '/__upgrade__',
+                                    'body': '', 'ctype': '', 'csrf': ''})
+            rec['upgrade'] = {'id': job['id'], 'state': 'running', 'started': now(),
+                              'message': '更新中，等待转发机完成回执…'}
+        safe_save()
+        log('全部更新：开始 %s' % name)
+        wait_upgrade(rec, job)
+        log('全部更新：%s 结束（%s）' % (name, (rec.get('upgrade') or {}).get('state')))
 
 
 def recover_upgrades():
@@ -664,6 +682,7 @@ PAGE_MAIN = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <header class="topbar"><div class="page-head"><h1>转发机</h1>
 <p class="sub" id="hinfo">加载中…</p></div>
 <div class="acts"><button class="btn" id="bRef" type="button">↻ 刷新</button>
+<button class="btn" id="bUpAll" type="button">⇈ 全部更新</button>
 <button class="btn p" id="bAdd" type="button">＋ 添加转发机</button></div></header>
 <main class="content">
 <div class="card alert" id="err" role="alert"></div>
@@ -838,6 +857,16 @@ $("#aCancel").onclick=()=>$("#dAdd").close();
 $("#dCancel").onclick=()=>$("#dDel").close();
 $("#eCancel").onclick=()=>$("#dEdit").close();
 $("#bRef").onclick=()=>load();
+const bUpAll=$("#bUpAll");
+if(bUpAll)bUpAll.onclick=async()=>{
+  if(!confirm('确认按顺序更新全部在线转发机？\n\n每台约 1-2 分钟，期间该机的落地机会短暂断开，完成后自动重连。'))return;
+  bUpAll.disabled=true;bUpAll.textContent='排队中…';
+  try{
+    const j=await api("/api/upgrade_all",{});
+    toast('已排队 '+j.queued.length+' 台：'+j.queued.join('、'),'ok',true);
+  }catch(e){toast('全部更新未提交：'+e.message,'bad',true);}
+  finally{bUpAll.disabled=false;bUpAll.textContent='⇈ 全部更新';}
+};
 $("#fAdd").onsubmit=async e=>{e.preventDefault();const b=$("#aOk");b.disabled=true;
   try{const j=await api("/api/add",{name:$("#aName").value.trim(),ip:$("#aIp").value.trim(),note:$("#aNote").value.trim()});
     $("#dAdd").close();load();showCmd(j.cmd);}catch(err){toast(err.message,"bad");}finally{b.disabled=false;}};
@@ -1459,6 +1488,8 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.jsend(200, {'ok': True})
         if r == '/api/upgrade':
             return self.do_upgrade(f)
+        if r == '/api/upgrade_all':
+            return self.do_upgrade_all(f)
         return self.send(404, 'Not Found', 'text/plain')
 
     def do_ssh_connect(self, f):
@@ -1526,6 +1557,16 @@ class H(http.server.BaseHTTPRequestHandler):
         safe_save()
         threading.Thread(target=wait_upgrade, args=(rec, job), daemon=True).start()
         return self.jsend(202, {'ok': True, 'upgrade': u})
+
+    def do_upgrade_all(self, f):
+        """把所有在线且不在更新中的转发机排进顺序更新队列。"""
+        with lock:
+            targets = [name for name, rec in state['forwarders'].items()
+                       if fwd_online(rec) and (rec.get('upgrade') or {}).get('state') != 'running']
+        if not targets:
+            return self.jsend(409, {'error': '没有可更新的转发机（全部离线或正在更新）'})
+        threading.Thread(target=upgrade_sequence, args=(targets,), daemon=True).start()
+        return self.jsend(202, {'ok': True, 'queued': targets})
 
 class Srv(http.server.ThreadingHTTPServer):
     daemon_threads = True
