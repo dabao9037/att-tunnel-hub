@@ -82,6 +82,41 @@ att-hub uninstall    # 卸载面板程序，保留配置和记录
 
 转发机上的 agent 用 `systemctl status att-hub-agent` 和 `journalctl -u att-hub-agent -f` 看。
 
+## DNS：屏蔽 SVCB(64) / HTTPS(65) 记录（默认开启）
+
+安装时会在本机起一个独立的 dnsmasq 实例（机器上已有 dnsmasq 在跑时则只注入配置、不另起实例），只做一件事：**丢弃 SVCB(Type 64) 与 HTTPS(Type 65) 两类 DNS 记录**。
+
+为什么：
+
+- 这两类 RR 的应答里带 `ipv4hint` / `ipv6hint`（**真实地址**）和 `ech`（加密 SNI 配置）。
+- 在 Fake-IP 代理体系下，客户端拿到 hint 会直接按真实 IP 连，绕过假 IP 与域名分流；`alpn=h3` 又会把流量推进 QUIC(UDP/443)，于是出口 IP 和 DNS 一起漏。
+- 过滤后客户端按 RFC 9460/9461 自动回退 A/AAAA + h2，业务功能不受影响，代价只是失去 HTTP/3 与 ECH。
+
+行为与保护：
+
+- 依赖 dnsmasq >= 2.86（`filter-rr` 自 2.86 起提供）。版本不够时**跳过**并告警，不会把系统 DNS 改坏。
+- 会把 `/etc/resolv.conf` 备份后指向 `127.0.0.1`，同时让出 53 端口：systemd-resolved 写 `DNSStubListener=no`，NetworkManager 写 `dns=none`。
+- 任何一步失败立即回滚、恢复原 resolv.conf。
+- 上游 DNS 沿用系统原有配置（自动剔除环回地址，不会自环）。
+- 只过滤 DNS，不封 UDP/443；浏览器已缓存的 Alt-Svc 仍可能继续走 QUIC，需要时在 `chrome://net-internals/#sockets` 里 Flush sockets。
+
+开关：
+
+```bash
+SVCB_BLOCK=0 bash install.sh install   # 本次安装不做屏蔽（默认 1 = 做）
+./install.sh --dns-block        # 只开屏蔽
+./install.sh --dns-status       # 看状态并实测
+./install.sh --dns-unblock      # 关闭并还原
+```
+
+验证：
+
+```bash
+dig +short A     example.com @127.0.0.1   # 有答案
+dig +short HTTPS example.com @127.0.0.1   # 空 = 已过滤
+```
+
+
 ## 安全说明
 
 - 面板：随机端口 + 随机根路径 + 密码登录；Cookie `HttpOnly`/`SameSite=Strict`；所有 POST 要会话 + CSRF + 同源校验；登录失败限速。
