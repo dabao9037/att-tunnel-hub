@@ -18,7 +18,7 @@ HUB_RAW_URL="${HUB_RAW_URL:-https://raw.githubusercontent.com/dabao9037/att-tunn
 # 转发机装 att-tunnel 入口端时用的 REALITY 伪装域名。取 att-tunnel 预置列表第一个；
 # 万一它不支持 TLS 1.3，att-tunnel 自己会换成预置列表里可用的那个，不会回头问人。
 # 需要指定时加 -d <域名>。
-DEFAULT_SNI="${ATT_HUB_SNI:-www.atlasobscura.com}"
+DEFAULT_SNI="${ATT_HUB_SNI:-www.debian.org}"
 
 HUB_DIR=/usr/local/lib/att-hub
 HUB_ETC=/etc/att-hub
