@@ -1384,7 +1384,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 rec['last_seen'] = now()
                 info = {}
                 for k in ('web', 'web_path', 'ver', 'ip', 'nodes', 'xray',
-                          'rx', 'tx', 'rate_rx', 'rate_tx', 'guard', 'quota'):
+                          'rx', 'tx', 'rate_rx', 'rate_tx', 'guard', 'quota', 'qsetup', 'qerr'):
                     if k in f:
                         info[k] = f[k]
                 if info:

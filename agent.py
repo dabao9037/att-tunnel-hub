@@ -351,6 +351,15 @@ def heartbeat_fields():
                 f['guard'] = 'gost1000'
     except OSError:
         pass
+    if os.path.exists('/etc/att-quota/quota.env'):
+        f['qsetup'] = '1'
+        try:
+            with open('/var/lib/att-quota/error.log') as fh:
+                f['qerr'] = fh.readline().strip()[:160]
+        except OSError:
+            pass
+    else:
+        f['qsetup'] = '0'
     try:
         with open('/var/lib/att-quota/state.json') as fh:
             q = json.load(fh)

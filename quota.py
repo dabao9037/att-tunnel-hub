@@ -239,5 +239,21 @@ def main():
     return 0
 
 
+def _logerr():
+    try:
+        import traceback
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open('/var/lib/att-quota/error.log', 'w') as f:
+            f.write(traceback.format_exc().strip().splitlines()[-1][:300] + '\n')
+    except OSError:
+        pass
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        _logerr()
+        raise
