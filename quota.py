@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """转发机端口日流量限额：超过阈值封端口，并把告警交给 hub（邮件由母鸡轮询发送）。
 
-只用标准库；计数/封停走 iptables 注释规则，按北京时间 00:00 重置。
-不碰 gost 或其他项目端口，只管理 att-tunnel 自己的入口/反代/WG 端口。
+只用标准库；用专用 iptables 链计数/封停，不依赖 xt_comment 内核模块。
+按北京时间 00:00 重置；只管理 att-tunnel 自己的端口，不碰 gost。
 """
 import json
 import os
@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 ENVF = os.environ.get('ATT_QUOTA_ENV', '/etc/att-quota/quota.env')
 STATE = os.environ.get('ATT_QUOTA_STATE', '/var/lib/att-quota/state.json')
 TZ = ZoneInfo('Asia/Shanghai')
+CH_IN, CH_OUT = 'ATTQ_IN', 'ATTQ_OUT'
+IPT = 'iptables'
 
 
 def log(*a):
@@ -57,9 +59,6 @@ def run(*args, check=False):
     return r
 
 
-IPT = 'iptables'
-
-
 def pick_ipt():
     global IPT
     for c in ('iptables', 'iptables-nft', 'iptables-legacy'):
@@ -67,13 +66,54 @@ def pick_ipt():
             continue
         if run(c, '-L', 'INPUT', '-n').returncode == 0:
             IPT = c
-            log('使用 %s' % c)
             return IPT
     raise RuntimeError('没有可用的 iptables（iptables / iptables-nft / iptables-legacy）')
 
 
 def ipt(*args):
     return run(IPT, *args)
+
+
+def ensure_chain(name, hook):
+    if ipt('-N', name).returncode not in (0, 1):
+        pass
+    # 挂到 INPUT/OUTPUT 顶部，幂等
+    if ipt('-C', hook, '-j', name).returncode != 0:
+        ipt('-I', hook, '1', '-j', name)
+
+
+def setup_chains():
+    ensure_chain(CH_IN, 'INPUT')
+    ensure_chain(CH_OUT, 'OUTPUT')
+
+
+def flush_chains():
+    ipt('-F', CH_IN)
+    ipt('-F', CH_OUT)
+
+
+def cleanup_legacy():
+    """删除上一版基于 -m comment 的规则，避免重复计数/重复封停。"""
+    out = run(IPT + '-save', '-c').stdout
+    for line in out.splitlines():
+        if 'attq:' not in line and 'attqb:' not in line:
+            continue
+        spec = line.split('] ', 1)[-1]
+        if spec.startswith('-A '):
+            ipt('-D', *spec[3:].split())
+
+
+def count_spec(proto, port, direction):
+    key = '--dport' if direction == 'in' else '--sport'
+    return [CH_IN if direction == 'in' else CH_OUT, '-p', proto, key, str(port)]
+
+
+def block_specs(proto, port):
+    rej = ['-j', 'REJECT', '--reject-with', 'tcp-reset'] if proto == 'tcp' else ['-j', 'DROP']
+    return [
+        [CH_IN, '-p', proto, '--dport', str(port)] + rej,
+        [CH_OUT, '-p', proto, '--sport', str(port)] + rej,
+    ]
 
 
 def rule_exists(spec):
@@ -84,7 +124,7 @@ def add_rule(spec):
     if not rule_exists(spec):
         r = ipt('-I', *spec)
         if r.returncode != 0:
-            raise RuntimeError('iptables -I %s: %s' % (' '.join(spec), r.stderr.strip()))
+            raise RuntimeError('%s %s: %s' % (IPT, ' '.join(spec), r.stderr.strip()))
 
 
 def del_rule(spec):
@@ -93,36 +133,16 @@ def del_rule(spec):
             break
 
 
-def count_spec(proto, port, direction):
-    key = '--dport' if direction == 'in' else '--sport'
-    return ['INPUT' if direction == 'in' else 'OUTPUT', '-p', proto, key, str(port),
-            '-m', 'comment', '--comment', 'attq:%s:%s' % (proto, port)]
-
-
-def block_specs(proto, port):
-    rej = ['-j', 'REJECT', '--reject-with', 'tcp-reset'] if proto == 'tcp' else ['-j', 'DROP']
-    c = 'attqb:%s:%s' % (proto, port)
-    return [
-        ['INPUT', '-p', proto, '--dport', str(port), '-m', 'comment', '--comment', c] + rej,
-        ['OUTPUT', '-p', proto, '--sport', str(port), '-m', 'comment', '--comment', c] + rej,
-    ]
-
-
 def counters(proto, port):
-    """返回该端口入+出累计字节数（iptables -c 计数器）。"""
+    save = IPT + '-save'
     total = 0
-    save = (IPT.replace('iptables', 'iptables-save') if IPT == 'iptables'
-            else IPT + '-save')
-    out = run(save, '-c').stdout
-    tag = 'attq:%s:%s' % (proto, port)
-    for line in out.splitlines():
-        if tag not in line or not line.startswith('['):
+    for line in run(save, '-c').stdout.splitlines():
+        if not line.startswith('['):
             continue
-        try:
-            # iptables-save -c 的格式是 [packets:bytes]
+        if ('-A %s ' % CH_IN) in line and ('--dport %s' % port) in line:
             total += int(line[line.index(':') + 1:line.index(']')])
-        except (ValueError, IndexError):
-            pass
+        elif ('-A %s ' % CH_OUT) in line and ('--sport %s' % port) in line:
+            total += int(line[line.index(':') + 1:line.index(']')])
     return total
 
 
@@ -131,7 +151,6 @@ def kill_conns(proto, port):
         return
     if run('conntrack', '-D', '-p', 'tcp', '--dport', str(port)).returncode == 0:
         return
-    # 没有 conntrack-tools 时退回 ss -K
     run('ss', '-K', 'dport', '=', ':%d' % port)
 
 
@@ -186,24 +205,19 @@ def main():
         proto, _, port = item.partition(':')
         if proto in ('tcp', 'udp') and port.isdigit():
             ports.append((proto, int(port)))
-    if not ports:
-        for p in (env.get('USER_PORT'), env.get('REVERSE_PORT')):
-            if p and p.isdigit():
-                ports.append(('tcp', int(p)))
-        wg = env.get('WG_PORT')
-        if wg and wg.isdigit():
-            ports.append(('udp', int(wg)))
     ports = sorted(set(ports))
     if not ports:
         log('没有可监控端口')
         return 2
 
+    setup_chains()
+    cleanup_legacy()
+
     if '--reset' in sys.argv:
         for proto, port in ports:
             for spec in block_specs(proto, port):
                 del_rule(spec)
-            for direction in ('in', 'out'):
-                del_rule(count_spec(proto, port, direction))
+        flush_chains()
         save_state({'day': '', 'ports': {}})
         print('已解除限额规则并清零')
         return 0
@@ -211,19 +225,7 @@ def main():
     today = datetime.now(TZ).strftime('%Y-%m-%d')
     st = load_state()
     if st.get('day') != today:
-        # 新的一天：解封、清零计数
-        for key, rec in (st.get('ports') or {}).items():
-            try:
-                proto, port = key.split(':', 1)
-                for spec in block_specs(proto, int(port)):
-                    del_rule(spec)
-            except Exception as e:  # noqa: BLE001
-                log('昨日解封失败', key, e)
-        for proto, port in ports:
-            for direction in ('in', 'out'):
-                spec = count_spec(proto, port, direction)
-                del_rule(spec)
-                add_rule(spec)
+        flush_chains()
         st = {'day': today, 'ports': {}}
         save_state(st)
 
