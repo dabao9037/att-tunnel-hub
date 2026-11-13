@@ -98,7 +98,7 @@ def main():
         return 0
     done = []
     for a in alerts:
-        if a.get('action') not in ('block', 'test'):
+        if a.get('action') not in ('block', 'test', 'ip_hour'):
             done.append(a['id'])
             continue
         try:
