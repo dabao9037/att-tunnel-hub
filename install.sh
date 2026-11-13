@@ -659,9 +659,14 @@ OnUnitActiveSec=60s
 [Install]
 WantedBy=timers.target
 EOF
+  if ! have iptables; then
+    (apt-get update -qq >/dev/null 2>&1 || true
+     apt-get install -y -qq iptables >/dev/null 2>&1 || true)
+  fi
   if ! have conntrack; then
     (apt-get install -y -qq conntrack >/dev/null 2>&1 || true)
   fi
+  have iptables || warn "iptables 仍不可用，端口限额无法生效"
   systemctl daemon-reload
   systemctl enable --now att-quota.timer >/dev/null 2>&1 || true
   /usr/bin/python3 "$QUOTA_DIR/quota.py" || warn "首次配额检查失败，请查看 journalctl -u att-quota"
