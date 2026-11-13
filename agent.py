@@ -299,7 +299,8 @@ def handle_upgrade():
     import tempfile
     try:
         hub_url = HUB.rstrip('/')
-        script_url = 'https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh'
+        script_url = ('https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh?ts=%d'
+                      % int(time.time()))
         with tempfile.TemporaryDirectory(prefix='att-upgrade-') as tmpdir:
             script_file = os.path.join(tmpdir, 'install.sh')
             dl = subprocess.run(['curl', '-fsSL', script_url, '-o', script_file],

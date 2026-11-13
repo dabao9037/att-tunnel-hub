@@ -1384,7 +1384,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 rec['last_seen'] = now()
                 info = {}
                 for k in ('web', 'web_path', 'ver', 'ip', 'nodes', 'xray',
-                          'rx', 'tx', 'rate_rx', 'rate_tx'):
+                          'rx', 'tx', 'rate_rx', 'rate_tx', 'guard', 'quota'):
                     if k in f:
                         info[k] = f[k]
                 if info:
@@ -1451,7 +1451,7 @@ class H(http.server.BaseHTTPRequestHandler):
         r = self.route()
         if r is None:
             return self.send(404, 'Not Found', 'text/plain')
-        if FWD_ORIGIN and r.startswith('/f/'):
+        if FWD_ORIGIN and not getattr(self, 'ISOLATED', False) and r.startswith('/f/'):
             # 主源不再承载代理 HTML；统一跳到独立源，避免同源脚本执行
             q = urllib.parse.urlsplit(self.path).query
             return self.redirect(FWD_ORIGIN + PREFIX + r + (('?' + q) if q else ''))
@@ -1693,6 +1693,8 @@ def inject_back(html, base, name):
 
 class HF(H):
     """独立源监听：只服务 /f/ 代理路径，其余一律 404。"""
+
+    ISOLATED = True
 
     def route(self):
         r = super().route()

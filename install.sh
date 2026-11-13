@@ -785,6 +785,9 @@ install_forwarder(){
   ok "att-tunnel 面板就绪"
   # 本机面板只给 agent 用，收回到 127.0.0.1，不对外暴露
   harden_att_web
+  # 配额/封停必须在重启 agent 之前装好：同步重启会连带杀掉本安装脚本
+  install_quota || true
+  install_gost_block || true
 
   # 3. 装 agent
   mkdir -p "$AG_DIR" "$AG_ETC"; chmod 700 "$AG_ETC"
@@ -816,9 +819,6 @@ EOF
     systemctl is-active --quiet att-hub-agent \
       || { journalctl -u att-hub-agent -n 20 --no-pager; die "agent 启动失败"; }
   fi
-
-  install_quota || true
-  install_gost_block || true
 
   echo
   ok "转发机安装完成，已回连面板 $hub"
