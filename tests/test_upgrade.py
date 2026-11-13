@@ -3,6 +3,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -56,6 +57,7 @@ f(){
 
 # Actual hub HTTP + simulated legacy agent: no production state or upgrade touched.
 import importlib.util
+import hmac
 import http.cookiejar
 import json
 import threading
@@ -68,6 +70,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (p / 'hub.env').write_text('WEB_PORT=1\nWEB_PATH=test\nWEB_PASS=testpass123\n')
     old_env = {k: os.environ.get(k) for k in ('HUB_ENV', 'HUB_STATE')}
     os.environ.update(HUB_ENV=str(p / 'hub.env'), HUB_STATE=str(p / 'state.json'))
+    sys.path.insert(0, str(ROOT))
     spec = importlib.util.spec_from_file_location('hub_test', ROOT / 'hub.py')
     hub = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hub)
@@ -101,7 +104,10 @@ with tempfile.TemporaryDirectory() as tmp:
             job = hub.bus.take('test', .1)
             assert job['req']['path'] == '/__upgrade__'
             if status is not None:
-                reply = json.load(post('/agent/reply', {'token': rec['token'], 'job': job['id'], 'status': status, 'body': 'sensitive-test-output'}))
+                body, ctype = 'sensitive-test-output', 'text/plain; charset=utf-8'
+                msg = '%s\n%s\n%s\n%s' % (job['id'], status, ctype, body)
+                mac = hmac.new(rec['token'].encode(), msg.encode(), 'sha256').hexdigest()
+                reply = json.load(post('/agent/reply', {'token': rec['token'], 'job': job['id'], 'status': status, 'body': body, 'ctype': ctype, 'mac': mac}))
                 assert reply['ok']
             end = time.monotonic() + 2
             while rec['upgrade']['state'] == 'running' and time.monotonic() < end:
@@ -115,6 +121,80 @@ with tempfile.TemporaryDirectory() as tmp:
             assert public['forwarders'][0]['upgrade']['state'] == expected
             assert 'sensitive-test-output' not in json.dumps(public)
             assert 'sensitive-test-output' not in (p / 'state.json').read_text()
+
+        # agent 回包完整性：缺签名/伪造签名/拿别台 token 回包都不能落到任务上。
+        job = hub.bus.submit('test', {'method': 'GET', 'path': '/', 'body': '', 'ctype': ''})
+        assert hub.bus.take('test', .5)['id'] == job['id']
+        forged = {'token': rec['token'], 'job': job['id'], 'status': '200',
+                  'body': '<script>alert(1)</script>', 'ctype': 'text/html; charset=utf-8'}
+        for mac in ('', '0' * 64):
+            try:
+                post('/agent/reply', dict(forged, mac=mac))
+                raise AssertionError('unsigned/forged agent reply accepted')
+            except urllib.error.HTTPError as e:
+                assert e.code == 403, e.code
+        assert job['resp'] is None
+        other = hub.fwd_add('zt', '127.0.0.1', '')
+        body, ctype = 'other', 'text/plain; charset=utf-8'
+        msg = '%s\n%s\n%s\n%s' % (job['id'], 200, ctype, body)
+        mac = hmac.new(other['token'].encode(), msg.encode(), 'sha256').hexdigest()
+        try:
+            post('/agent/reply', {'token': other['token'], 'job': job['id'], 'status': '200',
+                                  'body': body, 'ctype': ctype, 'mac': mac})
+            raise AssertionError('cross-forwarder reply accepted')
+        except urllib.error.HTTPError as e:
+            assert e.code == 404, e.code
+        assert job['resp'] is None
+        hub.fwd_del('zt')
+        body = 'ok-body'
+        ctype = 'text/plain; charset=utf-8'
+        msg = '%s\n%s\n%s\n%s' % (job['id'], 200, ctype, body)
+        mac = hmac.new(rec['token'].encode(), msg.encode(), 'sha256').hexdigest()
+        assert json.load(post('/agent/reply', dict(forged, body=body, ctype=ctype,
+                                                   mac=mac)))['ok']
+        assert job['resp']['body'] == 'ok-body'
+        print('PASS: agent reply requires valid per-forwarder HMAC and job ownership')
+
+        # 面板自身页面使用 nonce CSP；非 HTML 响应只给最小策略。
+        page_r = client.open(base + '/')
+        csp = page_r.headers.get('Content-Security-Policy') or ''
+        html = page_r.read().decode()
+        script_src = csp.split('script-src', 1)[1].split(';', 1)[0]
+        assert "default-src 'none'" in csp and "'nonce-" in script_src
+        assert 'unsafe-inline' not in script_src
+        assert re.search(r'<script nonce="[^"]+">', html)
+        static_r = client.open(base + '/static/xterm.js')
+        assert static_r.headers['Content-Security-Policy'] == \
+            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        print('PASS: hub pages carry strict nonce CSP; assets carry baseline CSP')
+
+        # 代理页必须保留内联脚本（否则「管理落地机」整页失效），但不能带 nonce 策略。
+        got = {}
+
+        def fetch_proxy():
+            try:
+                r = client.open(base + '/f/test/', timeout=10)
+                got.update(status=r.status, body=r.read().decode(),
+                           csp=r.headers.get('Content-Security-Policy') or '')
+            except Exception as e:  # noqa: BLE001 - 测试里把异常带回主线程断言
+                got['err'] = repr(e)
+
+        t = threading.Thread(target=fetch_proxy)
+        t.start()
+        job = hub.bus.take('test', 5)
+        assert job and job['req']['path'] == '/', job
+        body = '<html><body><script>window.x=1</script></body></html>'
+        ctype = 'text/html; charset=utf-8'
+        msg = '%s\n%s\n%s\n%s' % (job['id'], 200, ctype, body)
+        mac = hmac.new(rec['token'].encode(), msg.encode(), 'sha256').hexdigest()
+        assert json.load(post('/agent/reply', {'token': rec['token'], 'job': job['id'],
+                                               'status': '200', 'body': body,
+                                               'ctype': ctype, 'mac': mac}))['ok']
+        t.join(10)
+        assert got.get('status') == 200, got
+        assert '<script>' in got['body']
+        assert "script-src 'self' 'unsafe-inline'" in got['csp'] and 'nonce-' not in got['csp']
+        print('PASS: proxied panel HTML keeps inline scripts under its own CSP')
         rec['upgrade'] = {'id': 'restart-test', 'state': 'running'}
         hub.recover_upgrades()
         assert rec['upgrade']['state'] == 'unknown'

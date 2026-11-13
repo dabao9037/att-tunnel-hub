@@ -7,6 +7,7 @@
 #
 # 因此「转发机添加落地机」的页面就是 att-tunnel 面板原生页面，完全以 att-tunnel 为准。
 # 面板机下发的请求只能落到本机 att-tunnel 面板的路径上，没有任意命令执行通道。
+import hmac
 import json
 import os
 import re
@@ -259,9 +260,6 @@ def handle(job):
     body = job.get('body') or ''
     ctype = job.get('ctype') or ''
     
-    # 特殊处理升级请求：直接重跑本机的安装脚本
-    if path == '/__upgrade__' and method == 'POST':
-        return handle_upgrade()
     with local.lock:
         if not local.cookie:
             local.login()
@@ -286,54 +284,9 @@ def handle(job):
         st, text, rct = local.req(method, path, body if method == 'POST' else None, ctype)
         if st in (401, 403) or is_login_response(text, rct):
             return {'status': 502,
-                    'body': '<p class="err">转发机本地面板会话失效，自动重新登录仍未成功；请检查该机的 att-tunnel 面板。</p>',
-                    'ctype': 'text/html; charset=utf-8'}
+                    'body': '转发机本地面板会话失效，自动重新登录仍未成功；请检查该机的 att-tunnel 面板。',
+                    'ctype': 'text/plain; charset=utf-8'}
     return {'status': st, 'body': text, 'ctype': rct}
-
-
-def handle_upgrade():
-    """执行升级：从 HUB_URL 重新下载 install.sh 并运行。"""
-    import subprocess
-    import tempfile
-    import os
-    try:
-        hub_url = HUB.rstrip('/')
-        script_url = 'https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh'
-        
-        # 使用临时目录，避免权限和路径问题
-        with tempfile.TemporaryDirectory(prefix='att-upgrade-') as tmpdir:
-            script_file = os.path.join(tmpdir, 'install.sh')
-            
-            # 下载脚本（用列表避免 shell 注入）
-            dl = subprocess.run(['curl', '-fsSL', script_url, '-o', script_file],
-                              capture_output=True, text=True, timeout=60)
-            if dl.returncode != 0:
-                return {'status': 500, 'body': f'下载失败：{dl.stderr}',
-                        'ctype': 'text/plain; charset=utf-8'}
-            
-            os.chmod(script_file, 0o755)
-            
-            # 运行升级（用列表形式传参，避免引号转义问题）
-            result = subprocess.run(
-                ['/bin/bash', script_file, '-a', hub_url, '-s', TOKEN],
-                capture_output=True, text=True, timeout=600, cwd=tmpdir
-            )
-            
-            if result.returncode == 0:
-                return {'status': 200, 'body': '升级完成',
-                        'ctype': 'text/plain; charset=utf-8'}
-            else:
-                err = result.stderr.strip() or result.stdout.strip() or '升级失败（未知错误）'
-                return {'status': 500, 'body': err,
-                        'ctype': 'text/plain; charset=utf-8'}
-    
-    except subprocess.TimeoutExpired:
-        return {'status': 504, 'body': '升级超时（超过 10 分钟）',
-                'ctype': 'text/plain; charset=utf-8'}
-    except Exception as e:
-        log('升级异常:', e)
-        return {'status': 500, 'body': f'升级异常：{str(e)}',
-                'ctype': 'text/plain; charset=utf-8'}
 
 # ---------------------------------------------------------------- 主循环
 def heartbeat_fields():
@@ -366,9 +319,13 @@ def run_job(job):
                 'body': '<p class="err">转发机本地面板调用失败：%s</p>' % e,
                 'ctype': 'text/html; charset=utf-8'}
     try:
+        status = int(resp['status'])
+        body, ctype = resp['body'], resp['ctype']
+        msg = '%s\n%s\n%s\n%s' % (job['id'], status, ctype or '', body or '')
+        mac = hmac.new(TOKEN.encode(), msg.encode('utf-8'), 'sha256').hexdigest()
         hub_post('/agent/reply', {'token': TOKEN, 'job': job['id'],
-                                  'status': str(resp['status']),
-                                  'body': resp['body'], 'ctype': resp['ctype']}, 60)
+                                  'status': str(status), 'body': body,
+                                  'ctype': ctype, 'mac': mac}, 60)
     except Exception as e:
         log('回包失败:', e)
 

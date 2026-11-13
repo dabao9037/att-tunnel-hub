@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from html import escape as html_escape
 
 import sshterm
 
@@ -135,6 +136,18 @@ def fwd_by_token(token):
             if hmac.compare_digest(rec['token'], token):
                 return name, rec
     return None, None
+
+
+def reply_mac(rec, job_id, status, ctype, body):
+    # 使用 agent 已持有的专属 token，避免新增密钥分发和旧状态迁移。
+    key = str(rec.get('token') or '').encode()
+    msg = '%s\n%s\n%s\n%s' % (job_id, int(status), ctype or '', body or '')
+    return hmac.new(key, msg.encode('utf-8'), 'sha256').hexdigest()
+
+
+def reply_verified(rec, job_id, status, ctype, body, mac):
+    expected = reply_mac(rec, job_id, status, ctype, body)
+    return bool(mac) and hmac.compare_digest(str(mac), expected)
 
 
 def fwd_online(rec):
@@ -859,7 +872,7 @@ $("#eCancel").onclick=()=>$("#dEdit").close();
 $("#bRef").onclick=()=>load();
 const bUpAll=$("#bUpAll");
 if(bUpAll)bUpAll.onclick=async()=>{
-  if(!confirm('确认按顺序更新全部在线转发机？\n\n每台约 1-2 分钟，期间该机的落地机会短暂断开，完成后自动重连。'))return;
+  if(!confirm('确认按顺序更新全部在线转发机？\\n\\n每台约 1-2 分钟，期间该机的落地机会短暂断开，完成后自动重连。'))return;
   bUpAll.disabled=true;bUpAll.textContent='排队中…';
   try{
     const j=await api("/api/upgrade_all",{});
@@ -1207,11 +1220,35 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def send(self, code, body, ctype='text/html; charset=utf-8', extra=()):
         if isinstance(body, str):
+            route = self.route() or ''
+            if 'html' in (ctype or '').lower() and route.startswith('/f/'):
+                # 代理的是转发机本机的 att-tunnel 面板，它必须跑自己的内联脚本；
+                # 这里禁止外部加载/外联，真正的同源隔离需要独立域名（见部署说明）。
+                policy = ("default-src 'self' data:; script-src 'self' 'unsafe-inline'; "
+                          "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                          "connect-src 'self'; object-src 'none'; base-uri 'none'; "
+                          "form-action 'self'; frame-ancestors 'none'")
+            elif 'html' in (ctype or '').lower():
+                nonce = secrets.token_urlsafe(18)
+                host = self.headers.get('Host') or ''
+                ws = (' ws://%s wss://%s' % (host, host)
+                      if re.fullmatch(r'[A-Za-z0-9.:\[\]-]+', host) else '')
+                body = re.sub(r'<script(?=[\s>])', '<script nonce="%s"' % nonce, body)
+                policy = (
+                    "default-src 'none'; script-src 'self' 'nonce-%s'; "
+                    "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                    "font-src 'self' data:; connect-src 'self'%s; "
+                    "object-src 'none'; base-uri 'none'; form-action 'self'; "
+                    "frame-ancestors 'none'" % (nonce, ws))
+            else:
+                policy = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+            extra = list(extra) + [('Content-Security-Policy', policy)]
             body = body.encode()
         self.send_response(code)
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Frame-Options', 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('X-Content-Type-Options', 'nosniff')
         for k, v in extra:
@@ -1239,6 +1276,9 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'public, max-age=86400')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Content-Security-Policy',
+                         "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         if self.command != 'HEAD':
             self.wfile.write(data)
@@ -1299,8 +1339,14 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_agent(self, r, raw):
         """/agent/poll 和 /agent/reply：agent 主动外拨进来的唯一两个接口。"""
-        f = self.form(raw)
-        name, rec = fwd_by_token(self.agent_token(f))
+        tok = self.agent_token()
+        if tok:
+            # 带 Bearer 时先验身份再解析请求体；老 agent 没有这个头，退回表单 token。
+            name, rec = fwd_by_token(tok)
+            f = self.form(raw) if rec else None
+        else:
+            f = self.form(raw)
+            name, rec = fwd_by_token(f.get('token', ''))
         if not rec:
             time.sleep(0.5)
             return self.jsend(401, {'error': 'bad token'})
@@ -1325,9 +1371,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 code = int(f.get('status') or 502)
             except ValueError:
                 code = 502
-            bus.answer(jid, {'status': code,
-                             'body': f.get('body', ''),
-                             'ctype': f.get('ctype', 'text/html; charset=utf-8'),
+            body = f.get('body', '')
+            ctype = f.get('ctype', 'text/plain; charset=utf-8')
+            if not reply_verified(rec, jid, code, ctype, body, f.get('mac')):
+                return self.jsend(403, {'error': 'invalid reply signature'})
+            with bus.cv:
+                job = bus.jobs.get(jid)
+                if not job or job.get('fwd') != name:
+                    return self.jsend(404, {'error': 'job not found'})
+            bus.answer(jid, {'status': code, 'body': body, 'ctype': ctype,
                              'headers': f.get('headers', '')})
             return self.jsend(200, {'ok': True})
         return self.send(404, 'Not Found', 'text/plain')
@@ -1578,7 +1630,7 @@ def inject_back(html, base, name):
     bar = ('<div style="position:sticky;top:0;z-index:99;display:flex;gap:12px;align-items:center;'
            'padding:8px 14px;background:#0f172a;color:#fff;font:14px system-ui">'
            '<a href="%s/" style="color:#93c5fd;text-decoration:none">← 返回面板</a>'
-           '<b>转发机 %s</b></div>') % (PREFIX, name)
+           '<b>转发机 %s</b></div>') % (PREFIX, html_escape(name))
     i = html.lower().find('<body')
     if i < 0:
         return html
