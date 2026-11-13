@@ -58,14 +58,19 @@ def ack(env, ids):
         return r.status == 200
 
 
+def msg_subject(a):
+    is_test = ('测试' in (a.get('detail') or '')) or str(a.get('test') or '') in ('1', 'true')
+    prefix = '[测试]' if is_test else ''
+    if a.get('action') == 'ip_hour':
+        return prefix + '[att-quota] %s 单 IP 一小时超 20GB：%s' % (
+            a.get('machine'), a.get('ip') or '?')
+    return prefix + '[att-quota] %s 端口 %s 已封停' % (a.get('machine'), a.get('port'))
+
+
 def send(env, a):
     when = datetime.fromtimestamp(int(a.get('ts') or 0), TZ).strftime('%Y-%m-%d %H:%M:%S')
     msg = EmailMessage()
-    if a.get('action') == 'ip_hour':
-        msg['Subject'] = '[att-quota] %s 单 IP 一小时超 20GB：%s' % (
-            a.get('machine'), a.get('ip') or '?')
-    else:
-        msg['Subject'] = '[att-quota] %s 端口 %s 已封停' % (a.get('machine'), a.get('port'))
+    msg['Subject'] = msg_subject(a)
     msg['From'] = env.get('MAIL_FROM') or env['SMTP_USER']
     msg['To'] = env['MAIL_TO']
     msg.set_content(
@@ -104,7 +109,7 @@ def main():
         try:
             send(env, a)
             done.append(a['id'])
-            log('已发送告警', a.get('machine'), a.get('port'))
+            log('已发送告警', a.get('machine'), a.get('port'), msg_subject(a))
         except Exception as e:  # noqa: BLE001
             log('发送失败，保留待重试：', a.get('id'), e)
             break
