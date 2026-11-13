@@ -627,7 +627,7 @@ PY
   ports=$(echo $ports | tr ' ' '\n' | sort -u | tr '\n' ' ')
   [ -n "$ports" ] || { warn "读不到 att-tunnel 端口，跳过限额"; return 0; }
   mkdir -p "$QUOTA_DIR" "$QUOTA_ETC" "$(dirname "$QUOTA_STATE")"
-  fetch_file quota.py "$QUOTA_DIR/quota.py" || { warn "quota.py 下载失败，跳过限额"; return 0; }
+  fetch_file quota2.py "$QUOTA_DIR/quota.py" || { warn "quota.py 下载失败，跳过限额"; return 0; }
   chmod 700 "$QUOTA_DIR/quota.py"
   umask 077
   cat > "$QUOTA_ETC/quota.env" <<EOF
