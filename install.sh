@@ -627,14 +627,14 @@ PY
   ports=$(echo $ports | tr ' ' '\n' | sort -u | tr '\n' ' ')
   [ -n "$ports" ] || { warn "读不到 att-tunnel 端口，跳过限额"; return 0; }
   mkdir -p "$QUOTA_DIR" "$QUOTA_ETC" "$(dirname "$QUOTA_STATE")"
-  fetch_file quota2.py "$QUOTA_DIR/quota.py" || { warn "quota.py 下载失败，跳过限额"; return 0; }
+  fetch_file quota3.py "$QUOTA_DIR/quota.py" || { warn "quota.py 下载失败，跳过限额"; return 0; }
   chmod 700 "$QUOTA_DIR/quota.py"
   umask 077
   cat > "$QUOTA_ETC/quota.env" <<EOF
 # att-tunnel 端口日流量限额（北京时间 00:00 重置）
 HUB_URL=$hub
 HUB_TOKEN=$token
-PORTS=$ports
+PORTS=
 THRESHOLD=${ATT_QUOTA_THRESHOLD:-50G}
 EOF
   chmod 600 "$QUOTA_ETC/quota.env"
