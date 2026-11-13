@@ -680,6 +680,52 @@ EOF
 }
 
 # 秘书3：把 Gost 1000 的封停做成开机自启（只在该机执行）
+
+install_ipmeter(){
+  [ -f /etc/att-tunnel/a.env ] || return 0
+  local dir=/usr/local/lib/att-quota etc=/etc/att-quota
+  mkdir -p "$dir" "$etc" /var/lib/att-quota
+  fetch_file ipmeter.py "$dir/ipmeter.py" || { warn "ipmeter.py 下载失败，跳过单 IP 告警"; return 0; }
+  chmod 700 "$dir/ipmeter.py"
+  umask 077
+  cat > "$etc/ipmeter.env" <<EOF
+HUB_URL=$hub
+HUB_TOKEN=$token
+IP_THRESHOLD=${ATT_IP_THRESHOLD:-20G}
+EOF
+  chmod 600 "$etc/ipmeter.env"
+  umask 022
+  if ! have conntrack; then
+    (apt-get install -y -qq conntrack >/dev/null 2>&1 || true)
+  fi
+  echo 'net.netfilter.nf_conntrack_acct=1' > /etc/sysctl.d/99-att-ipmeter.conf
+  sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null 2>&1 || true
+  cat > /etc/systemd/system/att-ipmeter.service <<EOF
+[Unit]
+Description=att-tunnel per-IP hourly traffic alert
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $dir/ipmeter.py
+EOF
+  cat > /etc/systemd/system/att-ipmeter.timer <<EOF
+[Unit]
+Description=run att-tunnel IP meter every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now att-ipmeter.timer >/dev/null 2>&1 || true
+  /usr/bin/python3 "$dir/ipmeter.py" || warn "首次单 IP 检查失败，请查看 journalctl -u att-ipmeter"
+  ok "单 IP 告警已启用（滚动 1 小时 ≥ ${ATT_IP_THRESHOLD:-20G}，所有端口）"
+}
+
 install_gost_block(){
   local ip
   ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
@@ -798,6 +844,7 @@ install_forwarder(){
   harden_att_web
   # 配额/封停必须在重启 agent 之前装好：同步重启会连带杀掉本安装脚本
   install_quota || true
+  install_ipmeter || true
   install_gost_block || true
 
   # 3. 装 agent

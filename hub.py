@@ -157,10 +157,10 @@ def fwd_online(rec):
     return now() - int(rec.get('last_seen') or 0) <= OFFLINE_AFTER
 
 
-def add_alert(machine, port, nbytes, action, detail=''):
+def add_alert(machine, port, nbytes, action, detail='', ip=''):
     rec = {'id': secrets.token_urlsafe(12), 'ts': now(), 'machine': machine,
            'port': int(port), 'bytes': int(nbytes), 'action': action,
-           'detail': str(detail)[:200]}
+           'detail': str(detail)[:200], 'ip': str(ip)[:64]}
     with lock:
         q = state.setdefault('alerts', [])
         q.append(rec)
@@ -1376,7 +1376,8 @@ class H(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 return self.jsend(400, {'error': 'bad port/bytes'})
             action = (f.get('action') or 'block')[:32]
-            rec2 = add_alert(name, port, nbytes, action, f.get('detail', ''))
+            rec2 = add_alert(name, port, nbytes, action, f.get('detail', ''),
+                             f.get('ip', ''))
             log('配额告警：%s 端口 %s 用量 %s 动作 %s' % (name, port, nbytes, action))
             return self.jsend(200, {'ok': True, 'id': rec2['id']})
         if r == '/agent/poll':
@@ -1384,7 +1385,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 rec['last_seen'] = now()
                 info = {}
                 for k in ('web', 'web_path', 'ver', 'ip', 'nodes', 'xray',
-                          'rx', 'tx', 'rate_rx', 'rate_tx', 'guard', 'quota', 'qsetup', 'qerr', 'qlog'):
+                          'rx', 'tx', 'rate_rx', 'rate_tx', 'guard', 'quota', 'qsetup', 'qerr', 'qlog', 'ipm'):
                     if k in f:
                         info[k] = f[k]
                 if info:

@@ -351,6 +351,8 @@ def heartbeat_fields():
                 f['guard'] = 'gost1000'
     except OSError:
         pass
+    if os.path.exists('/etc/att-quota/ipmeter.env'):
+        f['ipm'] = '1'
     if os.path.exists('/etc/att-quota/quota.env'):
         f['qsetup'] = '1'
         try:

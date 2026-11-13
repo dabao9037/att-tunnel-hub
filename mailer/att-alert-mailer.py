@@ -61,13 +61,18 @@ def ack(env, ids):
 def send(env, a):
     when = datetime.fromtimestamp(int(a.get('ts') or 0), TZ).strftime('%Y-%m-%d %H:%M:%S')
     msg = EmailMessage()
-    msg['Subject'] = '[att-quota] %s 端口 %s 已封停' % (a.get('machine'), a.get('port'))
+    if a.get('action') == 'ip_hour':
+        msg['Subject'] = '[att-quota] %s 单 IP 一小时超 20GB：%s' % (
+            a.get('machine'), a.get('ip') or '?')
+    else:
+        msg['Subject'] = '[att-quota] %s 端口 %s 已封停' % (a.get('machine'), a.get('port'))
     msg['From'] = env.get('MAIL_FROM') or env['SMTP_USER']
     msg['To'] = env['MAIL_TO']
     msg.set_content(
-        '转发机：%s\n端口：%s\n当日累计：%s（%s 字节）\n动作：%s\n时间：%s（北京时间）\n\n%s\n\n'
-        '端口将在北京时间次日 00:00 自动解封。\n'
-        % (a.get('machine'), a.get('port'), human(a.get('bytes')), a.get('bytes'),
+        '转发机：%s\n端口：%s\nIP：%s\n滚动一小时累计：%s（%s 字节）\n动作：%s\n时间：%s（北京时间）\n\n%s\n\n'
+        '本条只告警，不封 IP/端口。\n'
+        % (a.get('machine'), a.get('port'), a.get('ip') or '-',
+           human(a.get('bytes')), a.get('bytes'),
            a.get('action'), when, a.get('detail') or ''))
     ctx = ssl.create_default_context()
     with smtplib.SMTP_SSL(env['SMTP_HOST'], int(env.get('SMTP_PORT') or 465),
