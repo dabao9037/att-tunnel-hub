@@ -607,11 +607,25 @@ QUOTA_ETC=/etc/att-quota
 QUOTA_STATE=/var/lib/att-quota
 
 install_quota(){
-  local up rp wg
+  local ports wg
   [ -f /etc/att-tunnel/a.env ] || { warn "没有 a.env，跳过流量限额"; return 0; }
-  up=$(grep -E '^USER_PORT=' /etc/att-tunnel/a.env | cut -d= -f2-)
-  rp=$(grep -E '^REVERSE_PORT=' /etc/att-tunnel/a.env | cut -d= -f2-)
+  # 端口以实际 config.json 为准（a.env 的 USER_PORT 可能停留在迁移前的值）
+  ports=$(python3 - <<'PY' 2>/dev/null || true
+import json
+d=json.load(open('/usr/local/etc/att-tunnel/config.json'))
+for i in d.get('inbounds',[]):
+    tag=str(i.get('tag',''))
+    if tag=='probe-in' or tag.startswith('probe'):
+        continue
+    p=i.get('port')
+    if isinstance(p,int) and p>0:
+        print('tcp:%d'%p)
+PY
+)
   wg=$(python3 -c "import json;print(json.load(open('/etc/att-tunnel/wg.json')).get('port',''))" 2>/dev/null || true)
+  [ -n "$wg" ] && ports="$ports udp:$wg"
+  ports=$(echo $ports | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  [ -n "$ports" ] || { warn "读不到 att-tunnel 端口，跳过限额"; return 0; }
   mkdir -p "$QUOTA_DIR" "$QUOTA_ETC" "$(dirname "$QUOTA_STATE")"
   fetch_file quota.py "$QUOTA_DIR/quota.py" || { warn "quota.py 下载失败，跳过限额"; return 0; }
   chmod 700 "$QUOTA_DIR/quota.py"
@@ -620,9 +634,7 @@ install_quota(){
 # att-tunnel 端口日流量限额（北京时间 00:00 重置）
 HUB_URL=$hub
 HUB_TOKEN=$token
-USER_PORT=$up
-REVERSE_PORT=$rp
-WG_PORT=$wg
+PORTS=$ports
 THRESHOLD=${ATT_QUOTA_THRESHOLD:-50G}
 EOF
   chmod 600 "$QUOTA_ETC/quota.env"

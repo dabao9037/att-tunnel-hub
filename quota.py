@@ -48,7 +48,10 @@ def size(s):
 
 
 def run(*args, check=False):
-    r = subprocess.run(args, capture_output=True, text=True)
+    try:
+        r = subprocess.run(args, capture_output=True, text=True)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(args, 127, '', 'not found')
     if check and r.returncode != 0:
         raise RuntimeError('%s: %s' % (' '.join(args), (r.stderr or r.stdout).strip()))
     return r
@@ -99,7 +102,8 @@ def counters(proto, port):
         if tag not in line or not line.startswith('['):
             continue
         try:
-            total += int(line[1:line.index(':')])
+            # iptables-save -c 的格式是 [packets:bytes]
+            total += int(line[line.index(':') + 1:line.index(']')])
         except (ValueError, IndexError):
             pass
     return total
@@ -160,16 +164,31 @@ def main():
         return 2
     threshold = size(env.get('THRESHOLD', '50G'))
     ports = []
-    for p in (env.get('USER_PORT'), env.get('REVERSE_PORT')):
-        if p and p.isdigit():
-            ports.append(('tcp', int(p)))
-    wg = env.get('WG_PORT')
-    if wg and wg.isdigit():
-        ports.append(('udp', int(wg)))
+    for item in (env.get('PORTS') or '').split():
+        proto, _, port = item.partition(':')
+        if proto in ('tcp', 'udp') and port.isdigit():
+            ports.append((proto, int(port)))
+    if not ports:
+        for p in (env.get('USER_PORT'), env.get('REVERSE_PORT')):
+            if p and p.isdigit():
+                ports.append(('tcp', int(p)))
+        wg = env.get('WG_PORT')
+        if wg and wg.isdigit():
+            ports.append(('udp', int(wg)))
     ports = sorted(set(ports))
     if not ports:
         log('没有可监控端口')
         return 2
+
+    if '--reset' in sys.argv:
+        for proto, port in ports:
+            for spec in block_specs(proto, port):
+                del_rule(spec)
+            for direction in ('in', 'out'):
+                del_rule(count_spec(proto, port, direction))
+        save_state({'day': '', 'ports': {}})
+        print('已解除限额规则并清零')
+        return 0
 
     today = datetime.now(TZ).strftime('%Y-%m-%d')
     st = load_state()
