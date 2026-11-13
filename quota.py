@@ -212,6 +212,10 @@ def main():
 
     setup_chains()
     cleanup_legacy()
+    try:
+        os.remove('/var/lib/att-quota/error.log')
+    except OSError:
+        pass
 
     if '--reset' in sys.argv:
         for proto, port in ports:
