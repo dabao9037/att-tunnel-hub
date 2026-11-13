@@ -358,6 +358,13 @@ def heartbeat_fields():
                 f['qerr'] = fh.readline().strip()[:160]
         except OSError:
             pass
+        try:
+            with open('/var/lib/att-quota/install.log') as fh:
+                lines = [x for x in fh.read().splitlines() if x.strip()]
+            if lines:
+                f['qlog'] = lines[-1][:160]
+        except OSError:
+            pass
     else:
         f['qsetup'] = '0'
     try:
