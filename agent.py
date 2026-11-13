@@ -307,6 +307,20 @@ def heartbeat_fields():
         f['rate_rx'] = str(s['rate_rx'])
         f['rate_tx'] = str(s['rate_tx'])
     f['ver'] = VERSION
+    try:
+        with open('/var/lib/att-quota/gost1000.status') as fh:
+            if fh.read().strip() == 'on':
+                f['guard'] = 'gost1000'
+    except OSError:
+        pass
+    try:
+        with open('/var/lib/att-quota/state.json') as fh:
+            q = json.load(fh)
+        blocked = [k for k, v in (q.get('ports') or {}).items() if v.get('blocked')]
+        if q.get('day'):
+            f['quota'] = '%s;%s' % (q['day'], ','.join(blocked) or '-')
+    except (OSError, ValueError):
+        pass
     return f
 
 

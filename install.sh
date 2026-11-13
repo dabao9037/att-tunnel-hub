@@ -600,6 +600,96 @@ open_fw(){
   warn "云厂商安全组记得放行 $p/tcp"
 }
 
+
+# ---------------------------------------------------------------- 端口日流量限额
+QUOTA_DIR=/usr/local/lib/att-quota
+QUOTA_ETC=/etc/att-quota
+QUOTA_STATE=/var/lib/att-quota
+
+install_quota(){
+  local up rp wg
+  [ -f /etc/att-tunnel/a.env ] || { warn "没有 a.env，跳过流量限额"; return 0; }
+  up=$(grep -E '^USER_PORT=' /etc/att-tunnel/a.env | cut -d= -f2-)
+  rp=$(grep -E '^REVERSE_PORT=' /etc/att-tunnel/a.env | cut -d= -f2-)
+  wg=$(python3 -c "import json;print(json.load(open('/etc/att-tunnel/wg.json')).get('port',''))" 2>/dev/null || true)
+  mkdir -p "$QUOTA_DIR" "$QUOTA_ETC" "$(dirname "$QUOTA_STATE")"
+  fetch_file quota.py "$QUOTA_DIR/quota.py" || { warn "quota.py 下载失败，跳过限额"; return 0; }
+  chmod 700 "$QUOTA_DIR/quota.py"
+  umask 077
+  cat > "$QUOTA_ETC/quota.env" <<EOF
+# att-tunnel 端口日流量限额（北京时间 00:00 重置）
+HUB_URL=$hub
+HUB_TOKEN=$token
+USER_PORT=$up
+REVERSE_PORT=$rp
+WG_PORT=$wg
+THRESHOLD=${ATT_QUOTA_THRESHOLD:-50G}
+EOF
+  chmod 600 "$QUOTA_ETC/quota.env"
+  umask 022
+  cat > /etc/systemd/system/att-quota.service <<EOF
+[Unit]
+Description=att-tunnel port daily quota
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $QUOTA_DIR/quota.py
+EOF
+  cat > /etc/systemd/system/att-quota.timer <<EOF
+[Unit]
+Description=run att-tunnel quota every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target
+EOF
+  if ! have conntrack; then
+    (apt-get install -y -qq conntrack >/dev/null 2>&1 || true)
+  fi
+  systemctl daemon-reload
+  systemctl enable --now att-quota.timer >/dev/null 2>&1 || true
+  /usr/bin/python3 "$QUOTA_DIR/quota.py" || warn "首次配额检查失败，请查看 journalctl -u att-quota"
+  ok "端口限额已启用（每端口每日 ${ATT_QUOTA_THRESHOLD:-50G}，北京时间 00:00 重置）"
+}
+
+# 秘书3：把 Gost 1000 的封停做成开机自启（只在该机执行）
+install_gost_block(){
+  local ip
+  ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+  [ "$ip" = "45.139.193.125" ] || return 0
+  cat > /usr/local/sbin/att-block-gost1000.sh <<'EOF'
+#!/bin/bash
+set -e
+add(){ iptables -C "$@" 2>/dev/null || iptables -I "$@"; }
+add INPUT -p tcp --dport 1000 -j REJECT
+add OUTPUT -p tcp -d 192.220.73.39 --dport 44519 -j REJECT
+add OUTPUT -p udp -d 192.220.73.39 --dport 44519 -j REJECT
+mkdir -p /var/lib/att-quota
+echo on > /var/lib/att-quota/gost1000.status
+EOF
+  chmod 700 /usr/local/sbin/att-block-gost1000.sh
+  cat > /etc/systemd/system/att-block-gost1000.service <<'EOF'
+[Unit]
+Description=persist block of Gost 1000 forward
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/att-block-gost1000.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now att-block-gost1000.service >/dev/null 2>&1 || true
+  ok "Gost 1000 封停已持久化（开机自启）"
+}
+
 # ---------------------------------------------------------------- 转发机（机器2/3）
 install_forwarder(){
   local hub="${1:-}" token="${2:-}" sni="${3:-}"
@@ -714,6 +804,9 @@ EOF
     systemctl is-active --quiet att-hub-agent \
       || { journalctl -u att-hub-agent -n 20 --no-pager; die "agent 启动失败"; }
   fi
+
+  install_quota || true
+  install_gost_block || true
 
   echo
   ok "转发机安装完成，已回连面板 $hub"

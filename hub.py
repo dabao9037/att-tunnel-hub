@@ -76,6 +76,9 @@ RAW_URL = ENV.get('HUB_RAW_URL', '')
 HUB_URL = ENV.get('HUB_URL', '').rstrip('/')
 COOKIE_SECURE = ENV.get('WEB_COOKIE_SECURE', '0') == '1'
 TRUST_PROXY = ENV.get('WEB_TRUST_PROXY', '0') == '1'
+FWD_PORT = int(ENV.get('FWD_PORT', '0') or 0)          # /f/ 独立源监听端口（0=关闭）
+FWD_ORIGIN = ENV.get('FWD_ORIGIN', '').rstrip('/')      # 例如 https://att.165789.xyz:8443
+ALERT_TOKEN = ENV.get('ALERT_TOKEN', '')                # 邮件轮询器读取告警用
 if len(PASS) < 8 or PREFIX == '/':
     sys.exit('hub.env 不完整：WEB_PASS 至少 8 位，WEB_PATH 不能为空')
 
@@ -152,6 +155,18 @@ def reply_verified(rec, job_id, status, ctype, body, mac):
 
 def fwd_online(rec):
     return now() - int(rec.get('last_seen') or 0) <= OFFLINE_AFTER
+
+
+def add_alert(machine, port, nbytes, action, detail=''):
+    rec = {'id': secrets.token_urlsafe(12), 'ts': now(), 'machine': machine,
+           'port': int(port), 'bytes': int(nbytes), 'action': action,
+           'detail': str(detail)[:200]}
+    with lock:
+        q = state.setdefault('alerts', [])
+        q.append(rec)
+        del q[:-200]
+    safe_save()
+    return rec
 
 
 def fwd_add(name, ip, note):
@@ -737,7 +752,7 @@ PAGE_MAIN += '''
 '''
 PAGE_MAIN += '''
 <script>
-const P="{P}", C="{C}";
+const P="{P}", C="{C}", FO="{FO}";
 let FWD=[];
 const UPGRADES=new Map(), SUBMITTING=new Set();
 function upgradeButton(name){
@@ -775,7 +790,7 @@ function card(f){
   const a=f.agent||{};
   const initial=esc(String(f.name||"?").slice(0,1));
   const manage=f.online&&f.paneled
-    ? '<a class="btn p s" href="'+P+'/f/'+encodeURIComponent(f.name)+'/">管理落地机</a>'
+    ? '<a class="btn p s" href="'+(FO||"")+P+'/f/'+encodeURIComponent(f.name)+'/">管理落地机</a>'
     : '<button class="btn s" type="button" disabled title="转发机在线后可用">管理落地机</button>';
   return '<article class="card fcard"><div class="fhead"><div class="fname">'
     +'<span class="avatar" aria-hidden="true">'+initial+'</span><h2>'+esc(f.name)+'</h2></div>'
@@ -926,7 +941,7 @@ PAGE_NODES = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 '''
 PAGE_NODES += '''
 <script>
-const P="{P}", C="{C}";
+const P="{P}", C="{C}", FO="{FO}";
 const $=s=>document.querySelector(s);
 function toast(m,k){const d=document.createElement("div");d.className="toast "+(k||"");d.textContent=m;
   $("#toasts").appendChild(d);setTimeout(()=>d.remove(),4200);}
@@ -951,7 +966,7 @@ function row(n){
     +'<td class="mono">'+esc(n.sni||"—")+'</td>'
     +'<td class="num">'+fb(n.total)+'</td>'
     +'<td class="num mut">'+((+n.rate_up||+n.rate_down)?'↑'+fb(n.rate_up)+'/s ↓'+fb(n.rate_down)+'/s':'—')+'</td>'
-    +'<td><a class="btn s" href="'+P+'/f/'+encodeURIComponent(n.fwd)+'/">管理</a></td></tr>';
+    +'<td><a class="btn s" href="'+(FO||"")+P+'/f/'+encodeURIComponent(n.fwd)+'/">管理</a></td></tr>';
 }
 async function load(){
   $("#meta").textContent="正在向各转发机取数…";
@@ -1319,6 +1334,10 @@ class H(http.server.BaseHTTPRequestHandler):
             return False
         return bool(oh) and oh == host
 
+    def alert_auth(self):
+        tok = self.headers.get('X-Alert-Token') or ''
+        return bool(ALERT_TOKEN) and hmac.compare_digest(tok.encode(), ALERT_TOKEN.encode())
+
     def route(self):
         p = urllib.parse.urlsplit(self.path).path
         if p != PREFIX and not p.startswith(PREFIX + '/'):
@@ -1350,6 +1369,16 @@ class H(http.server.BaseHTTPRequestHandler):
         if not rec:
             time.sleep(0.5)
             return self.jsend(401, {'error': 'bad token'})
+        if r == '/agent/quota':
+            try:
+                port = int(f.get('port') or 0)
+                nbytes = int(f.get('bytes') or 0)
+            except ValueError:
+                return self.jsend(400, {'error': 'bad port/bytes'})
+            action = (f.get('action') or 'block')[:32]
+            rec2 = add_alert(name, port, nbytes, action, f.get('detail', ''))
+            log('配额告警：%s 端口 %s 用量 %s 动作 %s' % (name, port, nbytes, action))
+            return self.jsend(200, {'ok': True, 'id': rec2['id']})
         if r == '/agent/poll':
             with lock:
                 rec['last_seen'] = now()
@@ -1422,14 +1451,25 @@ class H(http.server.BaseHTTPRequestHandler):
         r = self.route()
         if r is None:
             return self.send(404, 'Not Found', 'text/plain')
+        if FWD_ORIGIN and r.startswith('/f/'):
+            # 主源不再承载代理 HTML；统一跳到独立源，避免同源脚本执行
+            q = urllib.parse.urlsplit(self.path).query
+            return self.redirect(FWD_ORIGIN + PREFIX + r + (('?' + q) if q else ''))
         if r.startswith('/static/'):
             return self.send_static(r)
+        if r == '/alerts/pending':
+            if not self.alert_auth():
+                return self.jsend(403, {'error': 'forbidden'})
+            with lock:
+                q = list(state.get('alerts') or [])
+            return self.jsend(200, {'alerts': q})
         sid, s = self.session()
         if r == '/':
             if not s:
                 return self.login_page(200)
             page = (PAGE_MAIN.replace('{CSS}', CSS).replace('{P}', PREFIX)
-                    .replace('{C}', s['csrf']).replace('{V}', VERSION))
+                    .replace('{C}', s['csrf']).replace('{V}', VERSION)
+                    .replace('{FO}', FWD_ORIGIN))
             return self.send(200, page)
         if r == '/api/status':
             if not s:
@@ -1439,7 +1479,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if not s:
                 return self.login_page(200)
             page = (PAGE_NODES.replace('{CSS}', CSS).replace('{P}', PREFIX)
-                    .replace('{C}', s['csrf']).replace('{V}', VERSION))
+                    .replace('{C}', s['csrf']).replace('{V}', VERSION)
+                    .replace('{FO}', FWD_ORIGIN))
             return self.send(200, page)
         if r == '/ssh':
             if not s:
@@ -1482,7 +1523,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send(404, 'Not Found', 'text/plain')
         raw = self.body()
         # agent 接入端：token 鉴权，不走会话/CSRF
-        if r in ('/agent/poll', '/agent/reply'):
+        if r in ('/agent/poll', '/agent/reply', '/agent/quota'):
             return self.do_agent(r, raw)
         ip = self.peer()
         if r == '/login':
@@ -1499,6 +1540,16 @@ class H(http.server.BaseHTTPRequestHandler):
             note_fail(ip)
             time.sleep(1)
             return self.login_page(401, '密码错误')
+        if r == '/alerts/ack':
+            if not self.alert_auth():
+                return self.jsend(403, {'error': 'forbidden'})
+            f = self.form(raw)
+            ids = {x for x in (f.get('ids') or '').split(',') if x}
+            with lock:
+                state['alerts'] = [a for a in (state.get('alerts') or [])
+                                   if a.get('id') not in ids]
+            safe_save()
+            return self.jsend(200, {'ok': True, 'left': len(state.get('alerts') or [])})
         sid, s = self.session()
         if not s:
             return self.jsend(401, {'error': 'unauthorized'})
@@ -1630,7 +1681,7 @@ def inject_back(html, base, name):
     bar = ('<div style="position:sticky;top:0;z-index:99;display:flex;gap:12px;align-items:center;'
            'padding:8px 14px;background:#0f172a;color:#fff;font:14px system-ui">'
            '<a href="%s/" style="color:#93c5fd;text-decoration:none">← 返回面板</a>'
-           '<b>转发机 %s</b></div>') % (PREFIX, html_escape(name))
+           '<b>转发机 %s</b></div>') % (HUB_URL, html_escape(name))
     i = html.lower().find('<body')
     if i < 0:
         return html
@@ -1640,12 +1691,24 @@ def inject_back(html, base, name):
     return html[:j + 1] + bar + html[j + 1:]
 
 
+class HF(H):
+    """独立源监听：只服务 /f/ 代理路径，其余一律 404。"""
+
+    def route(self):
+        r = super().route()
+        return r if r and r.startswith('/f/') else None
+
+
 def main():
     load_state()
     recover_upgrades()
     with lock:
         state['started'] = now()
     log('att-tunnel-hub 面板 v%s 启动，监听 %s:%d，路径 %s' % (VERSION, LISTEN, PORT, PREFIX))
+    if FWD_PORT:
+        fwd = Srv(('127.0.0.1', FWD_PORT), HF)
+        threading.Thread(target=fwd.serve_forever, daemon=True).start()
+        log('代理独立源监听 127.0.0.1:%d，外部入口 %s' % (FWD_PORT, FWD_ORIGIN or '(未配置)'))
     Srv((LISTEN, PORT), H).serve_forever()
 
 
