@@ -849,7 +849,7 @@ install_forwarder(){
 
   # 3. 装 agent
   mkdir -p "$AG_DIR" "$AG_ETC"; chmod 700 "$AG_ETC"
-  fetch_file agent.py "$AG_DIR/agent.py"
+  fetch_file agent2.py "$AG_DIR/agent.py"
   umask 077
   cat > "$AG_ETC/agent.env" <<EOF
 # att-hub-agent 配置（v$VERSION）
