@@ -13,7 +13,7 @@ set -Eeuo pipefail
 VERSION="1.11.4"
 # att-tunnel 网页面板（--web）和「添加节点可填 SSH 直装出口机」都还在 PR #2 分支上，
 # main 仍是 v2.0.0。先固定到含 SSH 直装和链接二维码 / 订阅的提交；PR #2 合并后改回 main。
-ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/8b4a6e9ae6650417bf4bf66e3df36a66ddbc7463/install.sh}"
+ATT_REPO_RAW="${ATT_REPO_RAW:-https://raw.githubusercontent.com/dabao9037/att-tunnel/ee0c9368e8a5337847846e7ebd8cb0ea4d6bb729/install.sh}"
 HUB_RAW_URL="${HUB_RAW_URL:-https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh}"
 # 转发机装 att-tunnel 入口端时用的 REALITY 伪装域名。取 att-tunnel 预置列表第一个；
 # 万一它不支持 TLS 1.3，att-tunnel 自己会换成预置列表里可用的那个，不会回头问人。
