@@ -57,8 +57,23 @@ def run(*args, check=False):
     return r
 
 
+IPT = 'iptables'
+
+
+def pick_ipt():
+    global IPT
+    for c in ('iptables', 'iptables-nft', 'iptables-legacy'):
+        if run('sh', '-c', 'command -v %s' % c).returncode != 0:
+            continue
+        if run(c, '-L', 'INPUT', '-n').returncode == 0:
+            IPT = c
+            log('使用 %s' % c)
+            return IPT
+    raise RuntimeError('没有可用的 iptables（iptables / iptables-nft / iptables-legacy）')
+
+
 def ipt(*args):
-    return run('iptables', *args)
+    return run(IPT, *args)
 
 
 def rule_exists(spec):
@@ -96,7 +111,9 @@ def block_specs(proto, port):
 def counters(proto, port):
     """返回该端口入+出累计字节数（iptables -c 计数器）。"""
     total = 0
-    out = run('iptables-save', '-c').stdout
+    save = (IPT.replace('iptables', 'iptables-save') if IPT == 'iptables'
+            else IPT + '-save')
+    out = run(save, '-c').stdout
     tag = 'attq:%s:%s' % (proto, port)
     for line in out.splitlines():
         if tag not in line or not line.startswith('['):
@@ -159,6 +176,7 @@ def alert(env, port, nbytes, action, detail):
 
 def main():
     env = load_env(ENVF)
+    pick_ipt()
     if not env.get('HUB_URL') or not env.get('HUB_TOKEN'):
         log('quota.env 不完整')
         return 2

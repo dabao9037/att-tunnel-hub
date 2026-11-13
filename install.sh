@@ -659,14 +659,15 @@ OnUnitActiveSec=60s
 [Install]
 WantedBy=timers.target
 EOF
-  if ! have iptables; then
+  if ! iptables -L INPUT -n >/dev/null 2>&1; then
     mkdir -p "$QUOTA_STATE"
     {
       echo "iptables missing; try apt"
       apt-get update 2>&1 | tail -3
-      apt-get install -y iptables 2>&1 | tail -6
+      apt-get install -y --reinstall iptables 2>&1 | tail -6
+      update-alternatives --set iptables /usr/sbin/iptables-nft 2>&1 | tail -2 || true
     } > "$QUOTA_STATE/install.log" 2>&1 || true
-    have iptables || tail -1 "$QUOTA_STATE/install.log" > "$QUOTA_STATE/error.log" 2>/dev/null || true
+    iptables -L INPUT -n >/dev/null 2>&1 || tail -1 "$QUOTA_STATE/install.log" > "$QUOTA_STATE/error.log" 2>/dev/null || true
   fi
   if ! have conntrack; then
     (apt-get install -y -qq conntrack >/dev/null 2>&1 || true)
