@@ -259,7 +259,9 @@ def handle(job):
         path = '/' + path
     body = job.get('body') or ''
     ctype = job.get('ctype') or ''
-    
+    if path == '/__upgrade__' and method == 'POST':
+        return handle_upgrade()
+
     with local.lock:
         if not local.cookie:
             local.login()
@@ -287,6 +289,41 @@ def handle(job):
                     'body': '转发机本地面板会话失效，自动重新登录仍未成功；请检查该机的 att-tunnel 面板。',
                     'ctype': 'text/plain; charset=utf-8'}
     return {'status': st, 'body': text, 'ctype': rct}
+
+def handle_upgrade():
+    """执行 hub 安装脚本，更新 att-tunnel / 本 agent / 端口限额。
+
+    只允许 hub 下发的 /__upgrade__ 任务触发，脚本地址固定；不接受任意命令。
+    """
+    import subprocess
+    import tempfile
+    try:
+        hub_url = HUB.rstrip('/')
+        script_url = 'https://raw.githubusercontent.com/dabao9037/att-tunnel-hub/main/install.sh'
+        with tempfile.TemporaryDirectory(prefix='att-upgrade-') as tmpdir:
+            script_file = os.path.join(tmpdir, 'install.sh')
+            dl = subprocess.run(['curl', '-fsSL', script_url, '-o', script_file],
+                                capture_output=True, text=True, timeout=60)
+            if dl.returncode != 0:
+                return {'status': 500, 'body': '下载失败：' + dl.stderr,
+                        'ctype': 'text/plain; charset=utf-8'}
+            os.chmod(script_file, 0o755)
+            result = subprocess.run(
+                ['/bin/bash', script_file, '-a', hub_url, '-s', TOKEN],
+                capture_output=True, text=True, timeout=600, cwd=tmpdir)
+            if result.returncode == 0:
+                return {'status': 200, 'body': '升级完成',
+                        'ctype': 'text/plain; charset=utf-8'}
+            err = result.stderr.strip() or result.stdout.strip() or '升级失败（未知错误）'
+            return {'status': 500, 'body': err, 'ctype': 'text/plain; charset=utf-8'}
+    except subprocess.TimeoutExpired:
+        return {'status': 504, 'body': '升级超时（超过 10 分钟）',
+                'ctype': 'text/plain; charset=utf-8'}
+    except Exception as e:  # noqa: BLE001
+        log('升级异常:', e)
+        return {'status': 500, 'body': '升级异常：' + str(e),
+                'ctype': 'text/plain; charset=utf-8'}
+
 
 # ---------------------------------------------------------------- 主循环
 def heartbeat_fields():
