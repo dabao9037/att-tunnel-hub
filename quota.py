@@ -6,6 +6,7 @@
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -100,7 +101,7 @@ def cleanup_legacy():
             continue
         spec = line.split('] ', 1)[-1]
         if spec.startswith('-A '):
-            ipt('-D', *spec[3:].split())
+            ipt('-D', *shlex.split(spec[3:]))
 
 
 def count_spec(proto, port, direction):
